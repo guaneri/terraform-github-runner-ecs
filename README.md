@@ -66,6 +66,24 @@ Before you begin, make sure you have:
 
 Follow these steps in order. Don't skip ahead - each step depends on the previous one!
 
+### Step 0: Fork the Repository (and When to Use a Branch)
+
+**Goal:** You should be able to **fork this repository**, fill in your own GitHub **Secrets** and **Variables**, and run the included GitHub Actions workflows to validate everything works.
+
+**Forking:**
+- Fork this repository into your own GitHub org/user.
+- Do your setup work (Secrets/Variables) in **your fork**.
+
+**When you need a branch:**
+- **You do not need a branch** just to configure GitHub Secrets/Variables (those are repo settings).
+- **You do need a branch** if you want to change code/config in the repo (Terraform files, module logic, workflow YAML, Dockerfile, README, etc.).
+
+**How to create a branch (recommended workflow):**
+1. In your fork, create a branch off your default branch (for example: `setup` or `feature/my-change`).
+2. Make and commit your changes to that branch.
+3. In the GitHub Actions UI, select **Run workflow → Use workflow from** and pick your branch when testing changes.
+4. When you’re happy, open a PR in your fork (and optionally merge it into your default branch).
+
 ### Step 1: Get Your AWS Account Information
 
 You'll need two pieces of information from AWS:
@@ -182,6 +200,25 @@ aws ssm put-parameter \
 ### Step 6: Build and Upload the Runner Docker Image
 
 A Docker image is like a package that contains everything the runner needs to work. We'll build it and upload it to AWS.
+
+**Option A (recommended): Use GitHub Actions to build & push the image**
+
+This repository includes a workflow at `.github/workflows/docker-build.yml` named **Build & Push Docker Image**.
+
+1. Go to your fork → **Actions**
+2. Select **Build & Push Docker Image**
+3. Click **Run workflow**
+4. Choose the branch you want to run it from
+5. For **Docker image tag**, type `latest`
+6. Click the green **Run workflow** button
+
+**(Optional) Screenshot placeholder:** Add a screenshot of the **Run workflow** dialog for this workflow here:
+`docs/screenshots/docker-build-run-workflow.png`
+
+If it runs successfully, the workflow will turn green and your ECR repository will have a new image tag.
+If it turns red, see **Troubleshooting workflow failures** below.
+
+**Option B: Build locally and push to ECR (manual)**
 
 **First, create a place to store the image (ECR Repository):**
 
@@ -319,6 +356,19 @@ This will show the most recent AMI ID for your region.
 
 **What this does:** The GitHub Actions workflow uses these secrets and variables to configure Terraform automatically when you deploy. The workflow reads these values and passes them to Terraform as environment variables (prefixed with `TF_VAR_`), which Terraform then uses to create and configure your AWS resources.
 
+### Quick Validation: Run the Workflows in Your Fork
+
+Once you fork the repository and set your GitHub **Secrets** and **Variables**, you can validate the setup by running the two workflows:
+
+1. **Build & Push Docker Image** (`.github/workflows/docker-build.yml`)
+   - Choose your branch
+   - Set image tag to `latest`
+2. **Multi-Org github runner Deployment** (`.github/workflows/deployment.yml`)
+   - Choose your branch
+   - Choose **plan** (recommended first validation)
+
+If both runs turn green, your configuration is likely correct. If either run turns red, start with **Troubleshooting workflow failures (red runs)** below.
+
 ### Step 9: Deploy Everything
 
 Deployment is done via the GitHub Actions workflow. This automatically uses your configured secrets and variables from Step 8.
@@ -331,11 +381,15 @@ In your GitHub repository, click on the **Actions** tab.
 
 1. Click on **Multi-Org github runner Deployment** in the workflow list
 2. Click **Run workflow** (dropdown button on the right)
+3. Pick the branch you want to run it from (use your default branch unless you are testing changes on a branch)
 3. Select the action you want:
    - **plan** - Preview what will be created (recommended first time)
    - **deploy** - Actually create everything in AWS
    - **destroy** - Remove everything (use with caution!)
 4. Click the green **Run workflow** button
+
+**(Optional) Screenshot placeholder:** Add a screenshot of the **Run workflow** dialog for this workflow here:
+`docs/screenshots/deployment-run-workflow.png`
 
 **3. Monitor the Deployment**
 
@@ -343,6 +397,11 @@ In your GitHub repository, click on the **Actions** tab.
 - For **plan**: Review the output to see what will be created
 - For **deploy**: This takes 5-10 minutes to create all resources
 - Watch for any errors in the workflow logs
+
+**Important (first-time validation): choose `plan` only**
+- At this step, only run **plan**. Do not run **deploy** or **destroy** unless you intentionally want to change AWS resources.
+- **plan** shows what would change and does not create resources.
+- **deploy** / **destroy** perform Terraform apply operations, which *do* modify AWS and can cost money.
 
 **What's happening behind the scenes:**
 - The workflow uses your GitHub secrets/variables to configure Terraform
@@ -356,6 +415,22 @@ In your GitHub repository, click on the **Actions** tab.
 - This step costs money (you're creating AWS resources)
 - Make sure all secrets and variables are set correctly before deploying
 - If something goes wrong, you can run the workflow with **destroy** action to clean up
+
+### Troubleshooting workflow failures (red runs)
+
+If either workflow run turns red, start here:
+
+**Common causes:**
+- Missing or misspelled GitHub **Secrets/Variables** (Step 8)
+- AWS OIDC role/permissions issues (`SHARED_AWS_ROLE_NAME`, trust policy, missing permissions)
+- Terraform backend issues (`TF_BACKEND_BUCKET` missing/wrong region/permissions)
+- ECR access issues (image pull/push `401 Unauthorized`, wrong account/region, missing repo permissions)
+- Network/VPC issues (wrong `SHARED_VPC_ID`, `SHARED_SUBNETS`, or security groups)
+
+**Fast debug tips:**
+- Open the failed job and read the *first* error in the logs (later errors are often cascading failures).
+- For ECR errors, confirm the image/account/region you’re using matches the AWS account the workflow assumes.
+- For Terraform errors, search the log for `Error:` and the resource name; fix the upstream config and re-run **plan** first.
 
 ### Step 10: Check That It Works
 
