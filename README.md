@@ -254,6 +254,8 @@ The following diagram shows how IAM roles, trust policies, and security groups a
 | **Runtime** | EC2 instance role | ec2.amazonaws.com | ECS for EC2, SSM Managed Instance Core |
 | **Runtime** | ECS task role | ecs-tasks.amazonaws.com | CloudWatch Logs, ECR pull, SSM (token + ECS Exec), EFS + KMS, optional STS assume |
 
+## Table of Contents
+
 - [Features](#features)
 - [Architecture](#architecture)
   - [Network ingress/egress (connecting to runners)](#network-ingressegress-connecting-to-runners)
