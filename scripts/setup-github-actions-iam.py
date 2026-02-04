@@ -13,6 +13,7 @@ import os
 import socket
 import ssl
 import sys
+import time
 
 import boto3
 from botocore.exceptions import ClientError
@@ -220,11 +221,21 @@ def create_terraform_exec_role(iam, env: dict[str, str]) -> None:
     except ClientError as e:
         if e.response["Error"]["Code"] != "NoSuchEntity":
             raise
-    iam.create_role(
-        RoleName=role_name,
-        AssumeRolePolicyDocument=json.dumps(trust_policy),
-        Description="Role used to run Terraform (plan/apply); trust from GitHub Actions role.",
-    )
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        try:
+            iam.create_role(
+                RoleName=role_name,
+                AssumeRolePolicyDocument=json.dumps(trust_policy),
+                Description="Role used to run Terraform (plan/apply); trust from GitHub Actions role.",
+            )
+            break
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "MalformedPolicyDocumentException" and attempt < max_attempts:
+                print(f"Waiting for IAM propagation (attempt {attempt}/{max_attempts})...")
+                time.sleep(10)
+            else:
+                raise
     iam.attach_role_policy(RoleName=role_name, PolicyArn="arn:aws:iam::aws:policy/AdministratorAccess")
     print(f"Created role '{role_name}' and attached AdministratorAccess.")
 
@@ -247,6 +258,8 @@ def main() -> None:
     ensure_oidc_provider(iam, thumbprint, env["AWS_ACCOUNT_ID"])
     create_github_actions_role(iam, env)
     create_state_role(iam, env)
+    # Brief delay so IAM can propagate the GitHub Actions role before it is used as a principal.
+    time.sleep(10)
     create_terraform_exec_role(iam, env)
 
     print("\n--- Values to set in GitHub (Settings → Secrets and variables → Actions) ---")

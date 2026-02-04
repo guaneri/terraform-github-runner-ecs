@@ -81,17 +81,18 @@ All of the following must be set (no defaults). The script exits with an error i
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
 | `TF_BACKEND_BUCKET` | S3 bucket name for Terraform state (same value you will set in GitHub as the `TF_BACKEND_BUCKET` secret). | Name of the S3 bucket you created (see step 1 above). |
-| `GITHUB_ORG` | GitHub organization or user that owns the repo (no URL, just the name). | Your GitHub org or username. |
-| `GITHUB_REPO` | Repository name. | The repo you are setting up (e.g. this repo's name if you forked it). |
-| `AWS_ORGANIZATION_ID` | AWS Organizations ID (used in state role trust condition `aws:PrincipalOrgID`). | AWS Console → **Organizations**; or `aws organizations describe-organization --query Organization.Id --output text` |
-| `AWS_ACCOUNT_ID` | AWS account ID (12-digit) where the roles are created. | AWS Console (top-right); or `aws sts get-caller-identity --query Account --output text` |
+| `GITHUB_ORG` | GitHub organization or user that owns the repo (no URL, just the name). | From the repo URL when you're on the repo main page: `https://github.com/ORG/REPO` → use the **ORG** part. |
+| `GITHUB_REPO` | Repository name. | From the repo URL when you're on the repo main page: `https://github.com/ORG/REPO` → use the **REPO** part. |
+| `AWS_ORGANIZATION_ID` | AWS Organizations ID (used in state role trust condition `aws:PrincipalOrgID`). | AWS Console → **Organizations**; or in **CloudShell** run: `aws organizations describe-organization --query Organization.Id --output text` (paste only the command, not the backticks, or you get "command not found"). |
+| `AWS_ACCOUNT_ID` | AWS account ID (12-digit) where the roles are created. | AWS Console (top-right); or in **CloudShell** run: `aws sts get-caller-identity --query Account --output text` (paste only the command, not the backticks). |
 | `GITHUB_ACTIONS_ROLE` | IAM role name for GitHub Actions (must match `SHARED_AWS_ROLE_NAME` in GitHub). | Any name you choose for this role. |
 | `STATE_ROLE_NAME` | IAM role name for Terraform state bucket access. | Any name you choose for this role. |
 | `TERRAFORM_EXEC_ROLE` | IAM role name for Terraform execution. | Any name you choose for this role. |
 
 ### Example: run in CloudShell
 
-1. Open **AWS CloudShell** in the account where you want the roles (same account the workflow will use). In the AWS Console, click the **CloudShell** icon (terminal) in the top bar; wait for the session to start.
+1. Open **AWS CloudShell** in the account where you want the roles (same account the workflow will use). In the AWS Console, click the **CloudShell** icon (terminal) in the top bar; wait for the session to start.  
+   If the prompt shows `>` at the start of a line instead of `~ $`, the shell is stuck waiting for input (e.g. from a bad paste). Press **Ctrl+C** to cancel and get back to a normal `~ $` prompt.
 
 2. Get the script into CloudShell (choose one):
 
@@ -103,12 +104,8 @@ All of the following must be set (no defaults). The script exits with an error i
      ```
    - The script is now at `scripts/setup-github-actions-iam.py`. In step 4 you will run: `python3 scripts/setup-github-actions-iam.py`.
 
-   **Option B: Create the script file manually (no git)**
-   - In CloudShell, click **Actions** (gear icon) → **New file**, or run `touch setup-github-actions-iam.py` in the terminal.
-   - Open the file in the CloudShell editor (e.g. **Actions** → **Open file** → `setup-github-actions-iam.py`).
-   - Open the script in GitHub in your browser: go to the repo → `scripts/setup-github-actions-iam.py` → **Raw**, then select all and copy.
-   - Paste the full contents into the CloudShell editor and save (e.g. Ctrl+S or **File** → **Save**).
-   - In the terminal, make sure you are in the directory that contains `setup-github-actions-iam.py` (e.g. run `ls setup-github-actions-iam.py` to confirm). In step 4 you will run: `python3 setup-github-actions-iam.py` (no `scripts/` prefix).
+   **Option B: Upload the script (no git)**  
+   CloudShell may only show **Actions** (gear icon) → **Upload file**. In GitHub open `scripts/setup-github-actions-iam.py` → **Raw**, save the page as `setup-github-actions-iam.py` on your machine, then upload that file via **Upload file**. In the terminal, confirm you're in the directory that contains it (e.g. `ls setup-github-actions-iam.py`). In step 4 you will run: `python3 setup-github-actions-iam.py` (no `scripts/` prefix).
 
 3. Set all required environment variables (replace with your values). See [Required environment variables](#required-environment-variables) for the full list and what each variable is.
 
@@ -122,13 +119,14 @@ All of the following must be set (no defaults). The script exits with an error i
    export STATE_ROLE_NAME=YOUR_STATE_ROLE_NAME
    export TERRAFORM_EXEC_ROLE=YOUR_TERRAFORM_EXEC_ROLE_NAME
    ```
-   Replace each placeholder (e.g. `YOUR_BUCKET_NAME`, `YOUR_ACCOUNT_ID`) with your actual values.
+
+   You can paste the whole block into the CloudShell terminal; it will run as separate commands (one per line). **Replace each placeholder with your real values before pasting**—otherwise the script will see the placeholders. Edit the block in a text editor on your machine (e.g. Notepad or your IDE), then paste the edited block into the terminal.
 
 4. Install boto3 (if needed) and run the script:
    - If you used **Option A** (cloned repo): `pip install boto3` then `python3 scripts/setup-github-actions-iam.py`
    - If you used **Option B** (created file manually): `pip install boto3` then `python3 setup-github-actions-iam.py`
 
-   The script prints what it creates and, at the end, the values to use in GitHub.
+   The script prints what it creates and, at the end, the values to use in GitHub. CloudShell may show a boto3 warning about Python 3.9; you can ignore it (Python 3.10+ is recommended where available).
 
 5. In your GitHub repo, go to **Settings → Secrets and variables → Actions** and add (or update) these secrets. Use the exact values you used when running the script (no defaults):
    - `SHARED_AWS_ACCOUNT_ID` = the value you set for `AWS_ACCOUNT_ID` in step 3 (the script also prints it at the end).
