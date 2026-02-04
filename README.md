@@ -27,8 +27,239 @@ You're going to create:
 - **Storage**: A place to save runner settings so they don't get lost when restarted
 - **Security**: Encrypted storage and secure token management
 
-## Table of Contents
+## Features
 
+- **EC2 or Fargate** – You can run the runners on either regular virtual machines (EC2) or on serverless containers (Fargate). Pick what fits your team and budget.
+- **Auto Scaling** – When more work shows up, AWS adds more runners. When things are quiet, it scales down so you’re not paying for idle machines.
+- **Encrypted storage (EFS)** – Runner settings and data are stored on a shared drive that’s encrypted so only your account can read it.
+- **Secure token storage (SSM Parameter Store)** – The secret token that lets runners talk to GitHub is stored in AWS, not in your code or config files.
+- **CloudWatch logging** – Logs from the runners go to AWS CloudWatch so you can search and debug when something goes wrong.
+- **Automatic cleanup** – Old containers, images, and volumes are cleaned up so the runner machines don’t run out of disk space.
+
+## Architecture
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                                AWS VPC                                           │
+│  ┌──────────────────────────┐      ┌──────────────────────────┐                 │
+│  │     Private Subnet       │      │     Private Subnet       │                 │
+│  │  ┌─────────────────────┐  │      │  ┌─────────────────────┐  │                 │
+│  │  │EC2 or Fargate (ECS) │  │      │  │EC2 or Fargate (ECS) │  │                 │
+│  │  │  ┌──────────────┐   │  │      │  │  ┌──────────────┐   │  │                 │
+│  │  │  │   Runner     │   │  │      │  │  │   Runner     │   │  │                 │
+│  │  │  └──────────────┘   │  │      │  │  └──────────────┘   │  │                 │
+│  │  └─────────────────────┘  │      │  └─────────────────────┘  │                 │
+│  │            │              │      │            │              │                 │
+│  │  ┌─────────────────────┐  │      │  ┌─────────────────────┐  │                 │
+│  │  │     EFS Mount       │  │      │  │     EFS Mount       │  │                 │
+│  │  └─────────────────────┘  │      │  └─────────────────────┘  │                 │
+│  └────────────┬──────────────┘      └────────────┬──────────────┘                 │
+│               └─────────────┬────────────────────┘                                 │
+│                   ┌─────────────────┐                                             │
+│                   │   EFS (KMS)      │                                             │
+│                   └─────────────────┘                                             │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+**What this diagram is showing:**
+
+- **AWS VPC (the big box)** – This is your private network (a logically isolated segment of AWS with its own IP address range (CIDR); resources in the VPC get private IPs and can route traffic to each other, and are isolated at the network level from other customers’ VPCs and from the public internet unless you add gateways or peering) in AWS. Everything in this setup lives inside it so it’s isolated and easier to secure.
+
+- **Private Subnets (the two middle boxes)** – We use two separate subnets (each is a subdivision of the VPC’s IP range with its own CIDR block; traffic is routed between subnets, and placing resources in different subnets—often in different Availability Zones—gives you isolation and fault tolerance). That way if one has an issue, the other can still run. Runners are only in private subnets, so they’re not directly on the public internet.
+
+- **EC2 or Fargate (ECS)** – Each box is a compute host: either an EC2 instance (a virtual machine: software-emulated computer with CPU, memory, and storage like a physical machine but running on AWS’s hardware) or a Fargate task (serverless container—no EC2 to manage). Both are managed by ECS (the service that runs your containers). On each one we run a **Runner** – the process that actually runs your GitHub Actions jobs.
+
+- **EFS Mount** – Each EC2 instance (the ECS host in the diagram) has its own EFS mount – its own connection to the EFS filesystem. So each runner has its own mount; the thing that’s shared is the EFS itself. All those mounts point at the same EFS, so every runner can read and write the same files (e.g. runner config and cache) instead of each EC2 keeping a separate copy.
+
+- **EFS (KMS)** at the bottom – That’s the one EFS filesystem. It’s encrypted with KMS so only your account can read the data. Every EC2 in both subnets mounts this same EFS, so their settings stay in sync and survive when a runner is replaced.
+
+- **Network ingress/egress** – Runners sit in private subnets with no public IP. **Egress**: outbound traffic (to GitHub, AWS APIs, package registries) goes from runners to a NAT Gateway (in a public subnet you provide), then to an Internet Gateway, then to the internet. **Ingress**: there is no inbound from the internet to the runners; security groups allow egress only, and runners poll GitHub for jobs instead of accepting incoming connections.
+
+In short: you get multiple EC2 instances (runner hosts) in private subnets, each with its own mount to one shared, encrypted EFS so they can do work for GitHub Actions and stay in sync. They reach the internet only via NAT for egress; nothing can connect in to the runners from the internet.
+
+#### Network ingress/egress (connecting to runners)
+
+Runners live in **private subnets** (no public IP). They reach the internet (GitHub, AWS APIs, package registries) via **egress** through a NAT Gateway. Nothing on the internet can open a connection **in** to the runners; runners **poll** GitHub for jobs.
+
+```text
+  Internet (GitHub, package registries, AWS APIs)
+                    │
+                    │  Egress: Runners initiate outbound (HTTPS, etc.)
+                    │  Responses return via same path. No inbound to runners.
+                    ▼
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  Internet Gateway (IGW) – VPC edge; allows traffic between VPC and Internet  │
+  └─────────────────────────────────────────────────────────────────────────────┘
+                    │
+  ┌─────────────────┴─────────────────────────────────────────────────────────┐
+  │  Public Subnet (you provide; not created by this repo)                      │
+  │  ┌─────────────────────────────────────────────────────────────────────┐   │
+  │  │  NAT Gateway – Private subnets route 0.0.0.0/0 here for outbound     │   │
+  │  └─────────────────────────────────────────────────────────────────────┘   │
+  └─────────────────────────────────┬───────────────────────────────────────────┘
+                    │
+                    │  Route table: 0.0.0.0/0 → NAT Gateway
+                    ▼
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  AWS VPC – Private Subnets (runners, ECS, EFS)                              │
+  │  Runners have only private IPs. Outbound traffic goes: Runner → NAT → IGW →   │
+  │  Internet. Ingress from Internet to runners: none (security groups allow      │
+  │  egress only; runners poll GitHub).                                          │
+  └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Autoscaling and scale configuration
+
+Scaling has two layers: (1) **EC2 host layer** (only when `launch_type = "EC2"`): an Auto Scaling Group plus an ECS Capacity Provider that can manage the ASG; (2) **Task layer**: each ECS service keeps a fixed number of runner tasks (`desired_count`). With **Fargate**, there is no ASG; scale is only the ECS service `desired_count`.
+
+```text
+  EC2 launch type:
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  ECS Capacity Provider (backed by ASG)                                      │
+  │  • Managed scaling: ENABLED – ECS adjusts ASG desired capacity               │
+  │  • Target capacity: 100% – ECS aims to keep capacity utilized                │
+  │  • Managed termination protection: ENABLED – avoid terminating instances     │
+  │    that are running tasks during scale-in                                    │
+  └─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    │  ECS drives ASG scale-up/scale-down
+                                    ▼
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  Auto Scaling Group (EC2 container instances)                                │
+  │  • min_size, max_size, desired_capacity (you set; ECS can change desired    │
+  │    when managed scaling is on)                                              │
+  │  • protect_from_scale_in: true (new instances protected until no tasks)     │
+  │  • default_cooldown: 300 s                                                   │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  Task layer (both EC2 and Fargate):
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  ECS Service (runner tasks)                                                  │
+  │  • desired_count – number of runner tasks to keep running (per service)     │
+  │  • deployment_minimum_healthy_percent – e.g. 100 = no scale-down during     │
+  │    deployments                                                               │
+  └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+| Layer | Setting | Where | Effect |
+|-------|---------|--------|--------|
+| **EC2 host (ASG)** | `asg_min_size` | Variable (default `0`) | Minimum EC2 instances; `0` allows scale-to-zero. |
+| **EC2 host (ASG)** | `asg_max_size` | Variable (default `5`) | Maximum EC2 instances; caps cost and scale-out. |
+| **EC2 host (ASG)** | `asg_desired_capacity` | Variable (default `1`) | Target number of EC2 instances; ECS managed scaling can change this when enabled. |
+| **EC2 capacity provider** | Managed scaling | `ecs.tf` (status `ENABLED`, `target_capacity = 100`) | ECS adjusts ASG desired capacity to keep utilization near 100%. |
+| **EC2 capacity provider** | Managed termination protection | `ecs.tf` (`ENABLED`) | ECS avoids terminating instances that are running tasks during scale-in. |
+| **ECS service** | `desired_count` | Variable / per service | Number of runner tasks to run; more = more concurrent jobs. |
+| **ECS service** | `deployment_minimum_healthy_percent` | Variable (default `100`) | Minimum % of tasks healthy during deploy; `100` = no scale-down during rollout. |
+| **Fargate** | No ASG | N/A | Scale is only via ECS service `desired_count`; Fargate adds/removes tasks. |
+
+#### Third-party connectivity
+
+The following diagram shows how components link to **third-party or external services** (outside your AWS account): GitHub for code and OIDC, AWS for deployment and runtime, and the public internet for package registries when workflow jobs run.
+
+```text
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  GitHub (third party)                                                        │
+  │  • github.com – repo, workflow triggers, runner list                          │
+  │  • token.actions.githubusercontent.com – OIDC (workflows assume AWS role)    │
+  └─────────────────────────────────────────────────────────────────────────────┘
+        │                              │
+        │ OIDC assume role              │ Register runner, poll jobs,
+        │ (deploy / build workflows)    │ report status (HTTPS)
+        ▼                              ▼
+  ┌──────────────────────┐    ┌─────────────────────────────────────────────────┐
+  │  AWS (your account)  │    │  Runners (in VPC, private subnets)               │
+  │  • S3 – Terraform    │    │  • ECR – pull runner image (and optional base)   │
+  │    state             │    │  • SSM Parameter Store – runner registration     │
+  │  • ECS, EC2, EFS –   │◄───│    token                                          │
+  │    deployment target │    │  • EFS, KMS, CloudWatch – runtime                 │
+  │  • ECR – push runner │    │  • Outbound to internet – package registries     │
+  │    image (build wf)  │    │    (npm, PyPI, Docker Hub, etc.) when jobs run   │
+  └──────────────────────┘    └─────────────────────────────────────────────────┘
+        │                                              │
+        │                                              │ HTTPS (egress via NAT)
+        │                                              ▼
+        │                     ┌─────────────────────────────────────────────────┐
+        │                     │  Internet – package registries (third party)     │
+        │                     │  • npm, PyPI, Maven, Docker Hub, etc.            │
+        │                     │  • Used by workflow jobs running on the runners  │
+        │                     └─────────────────────────────────────────────────┘
+```
+
+| Link | Direction | Purpose |
+|------|-----------|---------|
+| **GitHub → AWS** | GitHub Actions workflow → OIDC → IAM role | Deploy (Terraform), build/push image (ECR); no long-lived AWS keys. |
+| **GitHub ↔ Runners** | Runners → GitHub (HTTPS) | Register runner, poll for jobs, report status; runners initiate all calls. |
+| **Runners → AWS** | Runners → ECR, SSM, EFS, CloudWatch, ECS | Pull image, read token, mount EFS, write logs, ECS agent. |
+| **Runners → Internet** | Runners → public registries (egress) | Workflow jobs pull packages (npm, pip, Docker, etc.) via NAT. |
+
+#### Permissions management
+
+The following diagram shows how IAM roles, trust policies, and security groups are used for deployment (GitHub Actions → AWS) and for runtime (ECS tasks and EC2 container instances). Permissions are scoped by role; no long-lived AWS keys are stored in GitHub.
+
+```text
+  Deployment (GitHub Actions workflows) – created by scripts/setup-github-actions-iam.py
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  OIDC Provider: token.actions.githubusercontent.com                          │
+  │  • Trust: GitHub issues JWT; AWS validates and allows AssumeRoleWithWebIdentity │
+  └─────────────────────────────────────────────────────────────────────────────┘
+                                        │
+                                        │  Trust: repo:org/repo:* (OIDC)
+                                        ▼
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  GitHub Actions role (e.g. github-actions)                                   │
+  │  • AssumeStateAndExec: can assume state-role + Terraform exec role            │
+  │  • AdministratorAccess (for deploy/build workflows)                         │
+  └─────────────────────────────────────────────────────────────────────────────┘
+                    │                                    │
+    assume          │                                    │  assume
+    ────────────────┘                                    └────────────────
+                    │                                    │
+                    ▼                                    ▼
+  ┌──────────────────────────────┐    ┌──────────────────────────────────────────┐
+  │  State role                   │    │  Terraform exec role                     │
+  │  • Trust: same AWS Org +      │    │  • Trust: GitHub Actions role only       │
+  │    principal = GitHub Actions │    │  • AdministratorAccess (plan/apply)       │
+  │  • S3: list/get/put/delete    │    │  • Used by deployment workflow for       │
+  │    on TF state bucket         │    │    Terraform runs                         │
+  └──────────────────────────────┘    └──────────────────────────────────────────┘
+
+  Runtime (runners in ECS) – created by Terraform (runner_infra + runner_service)
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  EC2 container instances (when launch_type = EC2)                            │
+  │  • Instance profile → instance role                                          │
+  │  • Policies: AmazonEC2ContainerServiceforEC2Role, AmazonSSMManagedInstanceCore │
+  │  • Used by: ECS agent, image pull, SSM Session Manager                       │
+  └─────────────────────────────────────────────────────────────────────────────┘
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  ECS task (runner container) – execution role + task role (same role in repo) │
+  │  • Trust: ecs-tasks.amazonaws.com                                            │
+  │  • CloudWatch Logs (create stream, put events)                                │
+  │  • ECR (GetAuthorizationToken, BatchGetImage, etc.)                           │
+  │  • SSM (GetParameter – runner token; ssmmessages – ECS Exec)                 │
+  │  • EFS (ClientMount, ClientWrite) + KMS decrypt (ViaService = EFS)           │
+  │  • Optional: sts:AssumeRole / sts:TagSession for workflow-assumed roles      │
+  └─────────────────────────────────────────────────────────────────────────────┘
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  Security groups (network layer)                                             │
+  │  • Runner tasks SG: egress only (0.0.0.0/0) – outbound to GitHub, AWS, etc.  │
+  │  • EFS SG: ingress NFS (2049) from runner tasks SG only                        │
+  └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+| Scope | Role / resource | Trust | Key permissions |
+|-------|------------------|--------|------------------|
+| **Deploy** | GitHub Actions role | OIDC (repo:org/repo) | Assume state + Terraform exec; AdministratorAccess |
+| **Deploy** | State role | Same org + GitHub Actions role ARN | S3 state bucket (list, get, put, delete) |
+| **Deploy** | Terraform exec role | GitHub Actions role | AdministratorAccess (plan/apply) |
+| **Runtime** | EC2 instance role | ec2.amazonaws.com | ECS for EC2, SSM Managed Instance Core |
+| **Runtime** | ECS task role | ecs-tasks.amazonaws.com | CloudWatch Logs, ECR pull, SSM (token + ECS Exec), EFS + KMS, optional STS assume |
+
+- [Features](#features)
+- [Architecture](#architecture)
+  - [Network ingress/egress (connecting to runners)](#network-ingressegress-connecting-to-runners)
+  - [Autoscaling and scale configuration](#autoscaling-and-scale-configuration)
+  - [Third-party connectivity](#third-party-connectivity)
+  - [Permissions management](#permissions-management)
 - [What You Need Before Starting](#what-you-need-before-starting)
 - [Step-by-Step Setup Guide](#step-by-step-setup-guide)
   - [Step 1: Get Your AWS Account Information](#step-1-get-your-aws-account-information)
