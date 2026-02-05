@@ -38,6 +38,10 @@ You're going to create:
 
 ## Architecture
 
+#### Main architecture (VPC, subnets, ECS runners, EFS)
+
+This diagram shows what this repo deploys: a VPC and subnets (either your `vpc_id` and `subnets` or ones we create when `create_networking = true`), with ECS (EC2 or Fargate) running the GitHub runner in each subnet, each with an EFS mount to a single shared EFS filesystem.
+
 ```text
 ┌─────────────────────────────────────────────────────────────────────────────────┐
 │                                AWS VPC                                           │
@@ -73,40 +77,37 @@ You're going to create:
 
 - **EFS (KMS)** at the bottom – That’s the one EFS filesystem. It’s encrypted with KMS so only your account can read the data. Every EC2 in both subnets mounts this same EFS, so their settings stay in sync and survive when a runner is replaced.
 
-- **Network ingress/egress** – Runners sit in private subnets with no public IP. **Egress**: outbound traffic (to GitHub, AWS APIs, package registries) goes from runners to a NAT Gateway (in a public subnet you provide), then to an Internet Gateway, then to the internet. **Ingress**: there is no inbound from the internet to the runners; security groups allow egress only, and runners poll GitHub for jobs instead of accepting incoming connections.
+- **Network ingress/egress** – Runners sit in private subnets with no public IP. **Egress**: outbound traffic (to GitHub, AWS APIs, package registries) goes from runners to a **Transit Gateway** (your subnet route table sends 0.0.0.0/0 to tgw-...). **Ingress**: there is no inbound from the internet to the runners; security groups allow egress only, and runners poll GitHub for jobs instead of accepting incoming connections.
 
-In short: you get multiple EC2 instances (runner hosts) in private subnets, each with its own mount to one shared, encrypted EFS so they can do work for GitHub Actions and stay in sync. They reach the internet only via NAT for egress; nothing can connect in to the runners from the internet.
+In short: you get multiple EC2 instances (runner hosts) in the subnets you provide (or we create when `create_networking = true`), each with its own mount to one shared, encrypted EFS so they can do work for GitHub Actions and stay in sync. They reach the internet via your VPC's egress (a route to a Transit Gateway); nothing can connect in to the runners from the internet.
 
 #### Network ingress/egress (connecting to runners)
 
-Runners live in **private subnets** (no public IP). They reach the internet (GitHub, AWS APIs, package registries) via **egress** through a NAT Gateway. Nothing on the internet can open a connection **in** to the runners; runners **poll** GitHub for jobs.
+Egress uses a **Transit Gateway** only. To work out of the box, set **`create_networking = true`** and pass **`transit_gateway_id`** (an existing TGW, e.g. from your network account): this repo creates the VPC, private subnets, Transit Gateway VPC attachment, and a route table that sends 0.0.0.0/0 to that TGW. Alternatively, **bring your own** VPC and subnets (with that route already set) and pass `vpc_id` and `subnets`. The diagram shows **egress** (outbound via TGW) and **ingress** (none to runners).
 
 ```text
   Internet (GitHub, package registries, AWS APIs)
                     │
-                    │  Egress: Runners initiate outbound (HTTPS, etc.)
-                    │  Responses return via same path. No inbound to runners.
+                    │  Egress: Runners send outbound (HTTPS, etc.); responses
+                    │  return along the same path.
                     ▼
   ┌─────────────────────────────────────────────────────────────────────────────┐
-  │  Internet Gateway (IGW) – VPC edge; allows traffic between VPC and Internet  │
+  │  Transit Gateway (tgw-...); you provide the ID. When create_networking =   │
+  │  true we create VPC, subnets, TGW attachment, and route (0.0.0.0/0 → TGW). │
   └─────────────────────────────────────────────────────────────────────────────┘
                     │
-  ┌─────────────────┴─────────────────────────────────────────────────────────┐
-  │  Public Subnet (you provide; not created by this repo)                      │
-  │  ┌─────────────────────────────────────────────────────────────────────┐   │
-  │  │  NAT Gateway – Private subnets route 0.0.0.0/0 here for outbound     │   │
-  │  └─────────────────────────────────────────────────────────────────────┘   │
-  └─────────────────────────────────┬───────────────────────────────────────────┘
-                    │
-                    │  Route table: 0.0.0.0/0 → NAT Gateway
+                    │  Route: 0.0.0.0/0 → Transit Gateway
                     ▼
   ┌─────────────────────────────────────────────────────────────────────────────┐
-  │  AWS VPC – Private Subnets (runners, ECS, EFS)                              │
-  │  Runners have only private IPs. Outbound traffic goes: Runner → NAT → IGW →   │
-  │  Internet. Ingress from Internet to runners: none (security groups allow      │
-  │  egress only; runners poll GitHub).                                          │
+  │  VPC and subnets – runners, ECS, EFS                                         │
+  │  Either your vpc_id + subnets (you provide), or we create them when          │
+  │  create_networking = true. Runners have only private IPs.                     │
+  │  Ingress: none. Runners poll GitHub; no connections from the internet in.    │
   └─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+- **Egress:** Traffic from the subnets uses the route table’s 0.0.0.0/0 route to the Transit Gateway, then to the internet.
+- **Ingress:** There is no path from the internet into the runners. Runners have no public IP and poll GitHub for jobs; security groups allow egress only.
 
 #### Autoscaling and scale configuration
 
@@ -176,7 +177,7 @@ The following diagram shows how components link to **third-party or external ser
   │    image (build wf)  │    │    (npm, PyPI, Docker Hub, etc.) when jobs run   │
   └──────────────────────┘    └─────────────────────────────────────────────────┘
         │                                              │
-        │                                              │ HTTPS (egress via NAT)
+        │                                              │ HTTPS (egress via Transit Gateway)
         │                                              ▼
         │                     ┌─────────────────────────────────────────────────┐
         │                     │  Internet – package registries (third party)     │
@@ -190,7 +191,7 @@ The following diagram shows how components link to **third-party or external ser
 | **GitHub → AWS** | GitHub Actions workflow → OIDC → IAM role | Deploy (Terraform), build/push image (ECR); no long-lived AWS keys. |
 | **GitHub ↔ Runners** | Runners → GitHub (HTTPS) | Register runner, poll for jobs, report status; runners initiate all calls. |
 | **Runners → AWS** | Runners → ECR, SSM, EFS, CloudWatch, ECS | Pull image, read token, mount EFS, write logs, ECS agent. |
-| **Runners → Internet** | Runners → public registries (egress) | Workflow jobs pull packages (npm, pip, Docker, etc.) via NAT. |
+| **Runners → Internet** | Runners → public registries (egress) | Workflow jobs pull packages (npm, pip, Docker, etc.) via Transit Gateway. |
 
 #### Permissions management
 
