@@ -112,6 +112,11 @@ jobs:
       # Example: Settings -> Secrets and variables -> Actions -> Variables -> SHARED_AWS_ACCOUNT_ID
       TF_VAR_aws_account_id: ${{ secrets.SHARED_AWS_ACCOUNT_ID }}
       TF_VAR_aws_region: ${{ vars.SHARED_AWS_REGION }}
+      # Optional: create VPC, subnets, Transit Gateway (set SHARED_CREATE_NETWORKING=true and SHARED_VPC_CIDR, SHARED_NETWORKING_AZS)
+      TF_VAR_create_networking: ${{ vars.SHARED_CREATE_NETWORKING || 'false' }}
+      TF_VAR_vpc_cidr: ${{ vars.SHARED_VPC_CIDR }}
+      TF_VAR_networking_azs: ${{ vars.SHARED_NETWORKING_AZS }}
+      # When create_networking is false, set SHARED_VPC_ID and SHARED_SUBNETS; when true, leave them unset/empty
       TF_VAR_vpc_id: ${{ secrets.SHARED_VPC_ID }}
       TF_VAR_subnets: ${{ secrets.SHARED_SUBNETS }}
       # Top-level security_group_ids: used for infrastructure (runner_infra module) 

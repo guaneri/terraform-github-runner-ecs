@@ -87,3 +87,19 @@ output "ecs_service_names" {
   description = "Map of ECS service names by runner_services key."
   value       = { for k, v in module.runner_service : k => v.ecs_service_name }
 }
+
+# Networking outputs (only when create_networking is true).
+output "networking_vpc_id" {
+  description = "ID of the VPC created by the networking module. Set only when create_networking is true."
+  value       = var.create_networking ? module.networking[0].vpc_id : null
+}
+
+output "networking_subnet_ids" {
+  description = "IDs of the subnets created by the networking module. Set only when create_networking is true."
+  value       = var.create_networking ? module.networking[0].subnet_ids : null
+}
+
+output "networking_transit_gateway_id" {
+  description = "ID of the Transit Gateway created by the networking module. Set only when create_networking is true."
+  value       = var.create_networking ? module.networking[0].transit_gateway_id : null
+}

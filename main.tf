@@ -54,6 +54,10 @@ locals {
   })
 
   effective_runner_services = length(var.runner_services) > 0 ? var.runner_services : local._default_runner_services
+
+  # When create_networking is true, use networking module outputs; otherwise use provided vpc_id and subnets.
+  effective_vpc_id  = var.create_networking ? module.networking[0].vpc_id : var.vpc_id
+  effective_subnets = var.create_networking ? module.networking[0].subnet_ids : var.subnets
 }
 
 # Input validation resource
@@ -95,7 +99,30 @@ resource "terraform_data" "validate_inputs" {
       ])
       error_message = "Each runner_services entry must include non-empty github_org and runner_token_ssm_parameter_name."
     }
+
+    # When create_networking is false, vpc_id and subnets must be provided.
+    precondition {
+      condition     = var.create_networking || (trimspace(var.vpc_id) != "" && length(var.subnets) > 0)
+      error_message = "When create_networking is false, vpc_id and subnets must both be set."
+    }
+
+    # When create_networking is true, vpc_cidr and networking_azs must be provided.
+    precondition {
+      condition     = !var.create_networking || (trimspace(var.vpc_cidr) != "" && length(var.networking_azs) > 0)
+      error_message = "When create_networking is true, vpc_cidr and networking_azs must both be set."
+    }
   }
+}
+
+# Networking module: VPC, subnets, Transit Gateway, TGW attachment, and route (0.0.0.0/0 -> TGW).
+# Only created when create_networking is true; otherwise use existing vpc_id and subnets.
+module "networking" {
+  count  = var.create_networking ? 1 : 0
+  source = "./modules/networking"
+
+  vpc_cidr        = var.vpc_cidr
+  networking_azs  = var.networking_azs
+  name_prefix     = coalesce(trimspace(var.infra_name_prefix), var.cluster_name)
 }
 
 # Infrastructure module
@@ -148,8 +175,8 @@ module "runner_service" {
   launch_type            = var.launch_type                                # ECS launch type: "EC2" or "FARGATE"
   capacity_provider_name = module.runner_infra.ec2_capacity_provider_name # Name of the EC2 capacity provider (from runner_infra module output)
 
-  vpc_id             = var.vpc_id                                                          # VPC ID where the runner tasks will run
-  subnets            = var.subnets                                                         # List of subnet IDs for the runner tasks
+  vpc_id             = local.effective_vpc_id                                               # VPC: from networking module when create_networking, else var.vpc_id
+  subnets            = local.effective_subnets                                              # Subnets: from networking module when create_networking, else var.subnets
   security_group_ids = coalescelist(each.value.security_group_ids, var.security_group_ids) # Service-specific security groups, or fallback to top-level
   assign_public_ip   = false                                                               # Whether to assign public IP addresses to tasks (usually false)
 

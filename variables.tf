@@ -24,11 +24,35 @@ variable "aws_account_id" {
   type        = string
 }
 
+# When true, this repo creates the VPC, subnets, Transit Gateway, TGW attachment, and routes.
+# When false, you must provide vpc_id and subnets (existing VPC/subnets).
+variable "create_networking" {
+  description = "When true, create VPC, subnets, Transit Gateway, attachment, and route (0.0.0.0/0 -> TGW). When false, use existing vpc_id and subnets."
+  type        = bool
+  default     = false
+}
+
+# CIDR block for the VPC when create_networking is true (e.g. 10.0.0.0/16). Required when create_networking is true.
+variable "vpc_cidr" {
+  description = "CIDR block for the created VPC when create_networking is true. Use a private range (e.g. 10.0.0.0/16) that does not overlap with other networks."
+  type        = string
+  default     = ""
+}
+
+# Availability zone names for subnets when create_networking is true (e.g. [\"us-east-1a\", \"us-east-1d\"]). Required when create_networking is true.
+variable "networking_azs" {
+  description = "List of availability zone names where private subnets will be created when create_networking is true. Use at least two AZs for high availability."
+  type        = list(string)
+  default     = []
+}
+
 # List of subnet IDs where the runners will be deployed. You need at least 2 subnets (usually in different zones) for high availability.
 # A subnet is a range of IP addresses in your VPC (Virtual Private Cloud) - think of it as a specific network segment within your larger network where your resources can be placed.
+# Required when create_networking is false; ignored when create_networking is true.
 variable "subnets" {
-  description = "List of subnet IDs for the GitHub runner ECS service"
+  description = "List of subnet IDs for the GitHub runner ECS service. Required when create_networking is false."
   type        = list(string)
+  default     = []
 }
 
 # The Docker image that contains the GitHub Actions runner software. This is what actually runs your workflows.
@@ -140,9 +164,11 @@ variable "create_cluster" {
 }
 
 # The ID of your Virtual Private Cloud (VPC). This is the network where all your runners will live.
+# Required when create_networking is false; ignored when create_networking is true (module output is used).
 variable "vpc_id" {
-  description = "VPC id"
+  description = "VPC ID. Required when create_networking is false."
   type        = string
+  default     = ""
 }
 
 # Optional prefix added to all AWS resource names. Use this if deploying multiple orgs to the same AWS account to avoid name conflicts.

@@ -1,0 +1,24 @@
+################################################################################
+# Networking Module - Input Variables
+################################################################################
+#
+# Used when this repo creates VPC, subnets, Transit Gateway, and egress routes.
+# All values come from Terraform variables (no hardcoded IDs or CIDRs).
+#
+################################################################################
+
+variable "vpc_cidr" {
+  description = "CIDR block for the created VPC (e.g. 10.0.0.0/16). Use a private range that does not overlap with other networks you need to reach."
+  type        = string
+}
+
+variable "networking_azs" {
+  description = "List of availability zone names (e.g. [\"us-east-1a\", \"us-east-1d\"]) where private subnets will be created. Use at least two AZs for high availability."
+  type        = list(string)
+}
+
+variable "name_prefix" {
+  description = "Optional prefix for resource names (VPC, subnets, TGW, route table). Helps avoid collisions if multiple stacks exist."
+  type        = string
+  default     = "github-runner"
+}

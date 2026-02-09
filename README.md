@@ -36,7 +36,60 @@ You're going to create:
 - **CloudWatch logging** – Logs from the runners go to AWS CloudWatch so you can search and debug when something goes wrong.
 - **Automatic cleanup** – Old containers, images, and volumes are cleaned up so the runner machines don’t run out of disk space.
 
+## Repository layout
+
+This repository is organized as follows:
+
+- **Root Terraform** – `main.tf` (orchestration, networking module wiring, runner_infra and runner_service), `variables.tf`, `outputs.tf`, `providers.tf`. Optional `env/*.tfvars` for local or CI overrides.
+- **Terraform modules**
+  - `modules/runner_infra` – ECS cluster, capacity providers, EC2 ASG (if EC2 launch type), security groups.
+  - `modules/runner_service` – ECS service, task definition, EFS, KMS, security groups per runner service.
+  - `modules/networking` – Optional: Transit Gateway, VPC, private subnets (one per AZ), TGW VPC attachment, route table (0.0.0.0/0 → TGW). Used when `create_networking` is true.
+- **GitHub Actions workflows** (`.github/workflows/`)
+  - **deployment.yml** – Main deployment: plan/deploy/destroy the full stack (runners, ECS, EFS, and optionally networking). When `SHARED_CREATE_NETWORKING` is true, it creates the VPC, subnets, and TGW in the same run.
+  - **deploy-networking.yml** – Optional: plan/deploy only the networking module using a **separate state file**. See [Deploy networking only](.github/workflows/deploy-networking-README.md) for details.
+  - **docker-build.yml** – Build and push the runner Docker image to ECR.
+- **Other** – `docker/` (Dockerfile), `scripts/` (e.g. IAM setup), `tests/` (Terraform test fixtures).
+
 ## Architecture
+
+The following diagram shows the full picture: main architecture (VPC, subnets, ECS runners, EFS) together with network ingress and egress. We break it down below in separate diagrams and explanations.
+
+```text
+  Internet (GitHub, package registries, AWS APIs)
+                    │
+                    │  Egress: Runners send outbound (HTTPS, etc.); responses
+                    │  return along the same path.
+                    ▼
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  Transit Gateway (tgw-...). When create_networking = true we create the    │
+  │  TGW, VPC, subnets, TGW attachment, and route (0.0.0.0/0 → TGW).            │
+  └─────────────────────────────────────────────────────────────────────────────┘
+                    │
+                    │  Route: 0.0.0.0/0 → Transit Gateway
+                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                                AWS VPC                                           │
+│  ┌──────────────────────────┐      ┌──────────────────────────┐                 │
+│  │     Private Subnet       │      │     Private Subnet       │                 │
+│  │  ┌─────────────────────┐  │      │  ┌─────────────────────┐  │                 │
+│  │  │EC2 or Fargate (ECS) │  │      │  │EC2 or Fargate (ECS) │  │                 │
+│  │  │  ┌──────────────┐   │  │      │  │  ┌──────────────┐   │  │                 │
+│  │  │  │   Runner     │   │  │      │  │  │   Runner     │   │  │                 │
+│  │  │  └──────────────┘   │  │      │  │  └──────────────┘   │  │                 │
+│  │  └─────────────────────┘  │      │  └─────────────────────┘  │                 │
+│  │            │              │      │            │              │                 │
+│  │  ┌─────────────────────┐  │      │  ┌─────────────────────┐  │                 │
+│  │  │     EFS Mount       │  │      │  │     EFS Mount       │  │                 │
+│  │  └─────────────────────┘  │      │  └─────────────────────┘  │                 │
+│  └────────────┬──────────────┘      └────────────┬──────────────┘                 │
+│               └─────────────┬────────────────────┘                                 │
+│                   ┌─────────────────┐                                             │
+│                   │   EFS (KMS)      │                                             │
+│                   └─────────────────┘                                             │
+│  Ingress: none. Runners poll GitHub; no connections from the internet in.         │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
 
 #### Main architecture (VPC, subnets, ECS runners, EFS)
 
@@ -83,7 +136,7 @@ In short: you get multiple EC2 instances (runner hosts) in the subnets you provi
 
 #### Network ingress/egress (connecting to runners)
 
-Egress uses a **Transit Gateway** only. To work out of the box, set **`create_networking = true`** and pass **`transit_gateway_id`** (an existing TGW, e.g. from your network account): this repo creates the VPC, private subnets, Transit Gateway VPC attachment, and a route table that sends 0.0.0.0/0 to that TGW. Alternatively, **bring your own** VPC and subnets (with that route already set) and pass `vpc_id` and `subnets`. The diagram shows **egress** (outbound via TGW) and **ingress** (none to runners).
+Egress uses a **Transit Gateway** only. To work out of the box, set **`create_networking = true`**: this repo creates the Transit Gateway, VPC, private subnets, TGW VPC attachment, and a route table that sends 0.0.0.0/0 to that TGW. Alternatively, **bring your own** VPC and subnets (with that route already set) and pass `vpc_id` and `subnets`. The diagram shows **egress** (outbound via TGW) and **ingress** (none to runners).
 
 ```text
   Internet (GitHub, package registries, AWS APIs)
@@ -92,16 +145,16 @@ Egress uses a **Transit Gateway** only. To work out of the box, set **`create_ne
                     │  return along the same path.
                     ▼
   ┌─────────────────────────────────────────────────────────────────────────────┐
-  │  Transit Gateway (tgw-...); you provide the ID. When create_networking =   │
-  │  true we create VPC, subnets, TGW attachment, and route (0.0.0.0/0 → TGW). │
+  │  Transit Gateway (tgw-...). When create_networking = true we create the    │
+  │  TGW, VPC, subnets, TGW attachment, and route (0.0.0.0/0 → TGW).            │
   └─────────────────────────────────────────────────────────────────────────────┘
                     │
                     │  Route: 0.0.0.0/0 → Transit Gateway
                     ▼
   ┌─────────────────────────────────────────────────────────────────────────────┐
   │  VPC and subnets – runners, ECS, EFS                                         │
-  │  Either your vpc_id + subnets (you provide), or we create them when          │
-  │  create_networking = true. Runners have only private IPs.                     │
+  │  When create_networking = true we create TGW, VPC, and subnets; otherwise     │
+  │  use your vpc_id + subnets. Runners have only private IPs.                    │
   │  Ingress: none. Runners poll GitHub; no connections from the internet in.    │
   └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -258,6 +311,7 @@ The following diagram shows how IAM roles, trust policies, and security groups a
 ## Table of Contents
 
 - [Features](#features)
+- [Repository layout](#repository-layout)
 - [Architecture](#architecture)
   - [Network ingress/egress (connecting to runners)](#network-ingressegress-connecting-to-runners)
   - [Autoscaling and scale configuration](#autoscaling-and-scale-configuration)
@@ -266,7 +320,7 @@ The following diagram shows how IAM roles, trust policies, and security groups a
 - [What You Need Before Starting](#what-you-need-before-starting)
 - [Step-by-Step Setup Guide](#step-by-step-setup-guide)
   - [Step 1: Get Your AWS Account Information](#step-1-get-your-aws-account-information)
-  - [Step 2: Understand the Deployment Workflow](#step-2-understand-the-deployment-workflow)
+  - [Step 2: Understand the Deployment Workflows](#step-2-understand-the-deployment-workflows)
   - [Step 3: Set Up Your VPC (Virtual Network)](#step-3-set-up-your-vpc-virtual-network)
   - [Step 4: Get a GitHub Runner Token](#step-4-get-a-github-runner-token)
   - [Step 5: Save the Token Securely in AWS](#step-5-save-the-token-securely-in-aws)
@@ -294,7 +348,7 @@ Before you begin, make sure you have:
 4. **Docker Installed** - To build the runner image
    - Download: https://www.docker.com/get-started
 5. **GitHub Access** - Admin access to the GitHub organization or repository where you want to add runners
-6. **A VPC in AWS** - A virtual network (we'll help you check this)
+6. **A VPC in AWS** - A virtual network (we'll help you check this), or use create networking so the repo creates it
 
 ## Step-by-Step Setup Guide
 
@@ -332,11 +386,14 @@ You'll need two pieces of information from AWS:
 
 **Write these down** - you'll need them in later steps!
 
-### Step 2: Understand the Deployment Workflow
+### Step 2: Understand the Deployment Workflows
 
-Before gathering all the information you need, it's helpful to understand what the deployment workflow requires. This way, you'll know **why** you're collecting each piece of information in the following steps.
+Before gathering all the information you need, it's helpful to understand what the deployment workflows require. This way, you'll know **why** you're collecting each piece of information in the following steps.
 
-The deployment is handled by a GitHub Actions workflow located at `.github/workflows/deployment.yml`. This workflow uses GitHub repository **secrets** and **variables** to configure Terraform automatically.
+There are two deployment-related workflows:
+
+1. **Multi-Org github runner Deployment** (`.github/workflows/deployment.yml`) – The main workflow. It runs Terraform plan/deploy/destroy for the full stack (ECS cluster, runners, EFS, and optionally networking). When **create networking** is enabled (`SHARED_CREATE_NETWORKING` = `true`), this workflow creates the VPC, subnets, and Transit Gateway in the same run; you do not need a separate step. It uses GitHub repository **secrets** and **variables** to configure Terraform automatically.
+2. **Deploy networking only** (`.github/workflows/deploy-networking.yml`) – Optional. Runs Terraform only for the networking module (VPC, subnets, TGW) using a **separate state file**. Use this if you want to test or manage networking in isolation. See [.github/workflows/deploy-networking-README.md](.github/workflows/deploy-networking-README.md) for configuration and usage.
 
 **What the workflow needs:**
 
@@ -386,7 +443,7 @@ A VPC is like a private network in AWS. You need one with:
      aws ec2 modify-vpc-attribute --vpc-id vpc-12345678 --enable-dns-support
      ```
 
-**Don't have a VPC?** Ask your AWS administrator to create one, or create a simple one in the AWS Console (VPC → Create VPC).
+**Don't have a VPC?** Ask your AWS administrator to create one, or create a simple one in the AWS Console (VPC → Create VPC). If you use **create networking** (`SHARED_CREATE_NETWORKING` = `true`), you can skip this step—the repo will create the VPC and subnets for you.
 
 **Why you need this:** The deployment workflow needs your VPC ID, subnet IDs, and security group IDs for the `SHARED_VPC_ID`, `SHARED_SUBNETS`, and `SHARED_SECURITY_GROUP_IDS` secrets you'll set up in Step 8.
 
@@ -558,6 +615,20 @@ Go to **Settings** → **Secrets and variables** → **Actions** → **Variables
 | `SHARED_RUNNER_LABELS` | Comma-separated labels (no spaces after commas) | `self-hosted,team-a,ecs,ec2` or `self-hosted,linux,x64,production` | Used in `runs-on:` in workflows to target specific runners. Allows routing workflows to specific runner types | **You choose this** - Must include `self-hosted`. Add descriptive labels like team names, environment, or capabilities. Examples: `self-hosted,linux,x64,prod` or `self-hosted,team-a,docker,large` |
 | `SHARED_INSTANCE_AMI` | ECS-optimized AMI ID for your region | `ami-0123456789abcdef0` (varies by region) | The operating system image for EC2 instances. ECS-optimized AMI has Docker and ECS agent pre-installed | **See instructions below** - AMI ID is different for each region. Use the latest ECS-optimized AMI for your specific region |
 
+**3. Optional: Create networking (VPC, subnets, Transit Gateway)**
+
+If you want this repo to **create** the VPC, private subnets, **Transit Gateway**, VPC attachment to the TGW, and route(s) (so runner egress goes via the TGW), set the following. Nothing is passed in: the repo creates the Transit Gateway as well as the VPC and subnets. When this option is enabled, you do **not** set `SHARED_VPC_ID` or `SHARED_SUBNETS` (Terraform creates them and the TGW).
+
+**How to set them:** In the same place as above — **Settings** → **Secrets and variables** → **Actions** → **Variables** tab. All of these are non-sensitive (CIDR, AZs, a flag); no secrets are required for create-networking, so nothing needs to be hidden from the repo.
+
+**Keeping the repo safe for public use:** Do not put real account IDs, VPC IDs, or subnet IDs in this repository or in repo Variables (they are visible to anyone with read access). Put resource IDs and other sensitive values in **Secrets**. When you use create-networking, the Transit Gateway is created by Terraform so there is no TGW ID to pass in or store. The README and docs use only generic examples (e.g. `10.0.0.0/16`, `us-east-1a`); your actual values live only in GitHub Secrets and in your deployed AWS resources.
+
+| Name | Tab | What to Enter | Example | When |
+|------|-----|---------------|---------|------|
+| `SHARED_CREATE_NETWORKING` | **Variables** | `true` to create VPC, subnets, Transit Gateway, attachment, and routes | `true` | Required when you want the repo to create networking. Omit or set `false` when using your own VPC/subnets. |
+| `SHARED_VPC_CIDR` | **Variables** | CIDR block for the created VPC: the IP range for the VPC in slash notation (e.g. `/16` = 65,536 addresses). Use a private range (e.g. `10.x.x.x`, `172.16–31.x.x`, `192.168.x.x`) that does not overlap with other networks you need to reach. | `10.0.0.0/16` | Required when creating networking so Terraform knows the VPC address space. Generic values like `10.0.0.0/16` are safe to use in docs and Variables (they do not identify your account). |
+| `SHARED_NETWORKING_AZS` | **Variables** | JSON array of availability zone names (e.g. two AZs in your region) so subnets are created in each. Ensures runners span AZs for availability. | `["us-east-1a","us-east-1d"]` | Required when creating networking. Must be valid JSON; region AZ codes are generic and safe for public repos. |
+
 **To find the correct AMI for your region:**
 
 The AMI ID is different for each AWS region and changes when AWS releases updates. You need the latest ECS-optimized AMI for your specific region.
@@ -592,16 +663,15 @@ This will show the most recent AMI ID for your region.
 
 ### Quick Validation: Run the Workflows in Your Fork
 
-Once you fork the repository and set your GitHub **Secrets** and **Variables**, you can validate the setup by running the two workflows:
+Once you fork the repository and set your GitHub **Secrets** and **Variables**, you can validate the setup by running the workflows:
 
 1. **Build & Push Docker Image** (`.github/workflows/docker-build.yml`)
-   - Choose your branch
-   - Set image tag to `latest`
+   - Choose your branch; set image tag to `latest`.
 2. **Multi-Org github runner Deployment** (`.github/workflows/deployment.yml`)
-   - Choose your branch
-   - Choose **plan** (recommended first validation)
+   - Choose your branch; choose **plan** (recommended first validation). When `SHARED_CREATE_NETWORKING` is true, it will create the VPC, subnets, and TGW in the same run.
+3. **Deploy networking only** (`.github/workflows/deploy-networking.yml`) – Optional. Use a separate state file to create or change only networking; see [.github/workflows/deploy-networking-README.md](.github/workflows/deploy-networking-README.md) (requires `TF_NETWORKING_STATE_KEY` and networking Variables).
 
-If both runs turn green, your configuration is likely correct. If either run turns red, start with **Troubleshooting workflow failures (red runs)** below.
+If the main deployment and docker-build runs turn green, your configuration is likely correct. If any run turns red, start with **Troubleshooting workflow failures (red runs)** below.
 
 ### Step 9: Deploy Everything
 
@@ -644,6 +714,9 @@ In your GitHub repository, click on the **Actions** tab.
 - Setting up networking and security
 - Creating storage (EFS) for runner settings
 - Starting your first runner
+- If **create networking** is enabled (`SHARED_CREATE_NETWORKING` = `true`), it creates the VPC, subnets, and Transit Gateway first, then deploys into them
+- You can also run the **Deploy networking only** workflow (separate state file) to create or change just the networking without touching the main deployment; see [.github/workflows/deploy-networking-README.md](.github/workflows/deploy-networking-README.md)
+- When create networking is used, Terraform outputs include `networking_vpc_id`, `networking_subnet_ids`, and `networking_transit_gateway_id` (visible after apply or via `terraform output`).
 
 **Important:**
 - This step costs money (you're creating AWS resources)
