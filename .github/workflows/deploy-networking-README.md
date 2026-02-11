@@ -53,6 +53,189 @@ All configuration comes from **GitHub Settings → Secrets and variables → Act
 | `SHARED_AWS_REGION` | `us-east-1` | AWS region where resources are created. |
 | `SHARED_CLUSTER_NAME` | `nexus-repo` | Optional. Used for resource naming; defaults to `nexus-repo` if not set. |
 
+### How to choose `SHARED_VPC_CIDR`
+
+Choose a CIDR that is valid for your environment, not just a doc example.
+
+Rules:
+
+- Use a private RFC1918 range (`10.0.0.0/8`, `172.16.0.0/12`, or `192.168.0.0/16`).
+- Do not overlap with existing VPC CIDRs in this account/region.
+- Do not overlap with networks reachable through TGW, peering, VPN, or Direct Connect.
+- Keep it consistent with your subnet sizing plan (this module derives subnets from the VPC CIDR).
+
+Address space sizing:
+
+- A `/16` has 65,536 total IPs.
+- In AWS, each subnet reserves 5 IPs, but VPC-level CIDR capacity is still that size envelope.
+- Two `/16`s (`10.40.0.0/16` + `10.41.0.0/16`) give you about 131,072 total addresses.
+- Equivalent single block: `10.40.0.0/15` (also ~131,072 addresses).
+
+Recommendation:
+
+- If you want extra headroom, pick a non-overlapping `/15` for this runner VPC.
+
+Why you might need that much:
+
+- Future growth in runners, services, and subnet count.
+- Room to expand without adding secondary CIDRs later.
+- Cleaner long-term network planning in shared environments.
+
+Benefits of starting with `/15`:
+
+- More free address space from day one.
+- Fewer future rework events (subnet pressure, CIDR expansion planning).
+- Simpler operations versus adding a second CIDR block later.
+
+Check in AWS Console:
+
+1. Open **AWS Console** in the target account and region.
+2. Go to **VPC** → **Your VPCs**.
+3. Review the **CIDRs** column for existing VPC ranges.
+4. If Transit Gateway is used, also check **VPC** → **Transit Gateway Attachments** (and any peering/VPN/direct connect routes your team uses) to avoid overlap with connected networks.
+
+Check in CloudShell (same account/region):
+
+```bash
+# Set your region once
+AWS_REGION="us-east-1"
+
+# List VPC CIDRs in this region
+aws ec2 describe-vpcs \
+  --region "$AWS_REGION" \
+  --query "Vpcs[*].[VpcId,CidrBlock,Tags[?Key=='Name']|[0].Value]" \
+  --output table
+
+# Optional: list TGW VPC attachments in this region (to understand connected VPCs)
+aws ec2 describe-transit-gateway-vpc-attachments \
+  --region "$AWS_REGION" \
+  --query "TransitGatewayVpcAttachments[*].[TransitGatewayAttachmentId,TransitGatewayId,VpcId,State]" \
+  --output table
+```
+
+Optional IPAM policy check:
+
+```bash
+aws ec2 describe-ipam-pools --region "$AWS_REGION" --output table
+```
+
+If this prints only the table header (for example `DescribeIpamPools` with no rows), it means no IPAM pools are visible in this account/region or your current role does not have permission to read them.
+
+How to know which CIDR to pick:
+
+Choose a block that is:
+
+- In private RFC1918 space:
+  - `10.0.0.0/8`
+  - `172.16.0.0/12`
+  - `192.168.0.0/16`
+- Not present in your current VPC CIDR list.
+- Not overlapping TGW-connected networks.
+- Allowed by your org IP policy or IPAM (if used).
+
+What is RFC1918?
+
+RFC1918 means private, non-internet-routable IP ranges reserved for internal networks. In AWS VPCs, you should use these private ranges for CIDRs.
+
+Did we already run a TGW check?
+
+Yes. `describe-transit-gateway-vpc-attachments` is the TGW connectivity check. It tells you which VPCs are attached; then compare their CIDRs from `describe-vpcs` to ensure no overlap.
+
+How to check org policy or IPAM in CloudShell:
+
+```bash
+aws ec2 describe-ipams --region "$AWS_REGION" --output table
+aws ec2 describe-ipam-pools --region "$AWS_REGION" --output table
+```
+
+If these return nothing (or access denied), your org may not use IPAM in that account/region, or your role cannot read it. If `describe-ipam-pools` prints only the table header (for example `DescribeIpamPools` with no rows), treat that as no pools visible in this account/region for your current permissions. In that case, confirm allowed CIDR ranges with your network/platform team.
+
+Good vs bad examples:
+
+- Good: existing VPCs are `10.40.0.0/16` and `10.41.0.0/16`, choose a non-overlapping `/15` such as `10.42.0.0/15` (if your network policy allows it).
+- Bad: choosing `10.40.0.0/16` again when a VPC already uses that CIDR, or choosing a `/15` that overlaps existing/connected networks.
+- Policy check: confirm `/15` is allowed by your org network standards or IPAM pool constraints before deploy.
+
+### Detailed CIDR selection walkthrough
+
+#### How to pick `SHARED_VPC_CIDR`
+
+#### What to do first
+
+In CloudShell, set your target region:
+
+```bash
+AWS_REGION="us-east-1"
+```
+
+List existing VPC CIDRs in this account/region:
+
+```bash
+aws ec2 describe-vpcs \
+  --region "$AWS_REGION" \
+  --query "Vpcs[*].[VpcId,CidrBlock,Tags[?Key=='Name']|[0].Value]" \
+  --output table
+```
+
+If using Transit Gateway, list attached VPCs (connected networks):
+
+```bash
+aws ec2 describe-transit-gateway-vpc-attachments \
+  --region "$AWS_REGION" \
+  --query "TransitGatewayVpcAttachments[*].[TransitGatewayAttachmentId,TransitGatewayId,VpcId,State]" \
+  --output table
+```
+
+Optional quick CIDR-only view:
+
+```bash
+aws ec2 describe-vpcs \
+  --region "$AWS_REGION" \
+  --query "Vpcs[*].CidrBlock" \
+  --output text
+```
+
+Pick a non-overlapping `/15` (for headroom), for example `10.60.0.0/15`, only if both halves (`10.60.0.0/16` and `10.61.0.0/16`) are not already used or connected.
+
+#### How to know which CIDR to pick
+
+Choose a block that is:
+
+- In private RFC1918 space:
+  - `10.0.0.0/8`
+  - `172.16.0.0/12`
+  - `192.168.0.0/16`
+- Not present in your current VPC CIDR list.
+- Not overlapping TGW-connected networks.
+- Allowed by your org IP policy/IPAM (if used).
+
+Why those ranges (they are not random):
+
+- These are the globally reserved private IPv4 ranges defined by RFC1918.
+- They are intended for internal networks and are not publicly routable on the internet.
+- AWS VPC private addressing is built around these private ranges.
+
+#### What is RFC1918?
+
+RFC1918 means private, non-internet-routable IP ranges reserved for internal networks. In AWS VPCs, you should use these private ranges for CIDRs.
+
+#### Did we already run a TGW check?
+
+Yes. `describe-transit-gateway-vpc-attachments` is the TGW connectivity check. It tells you which VPCs are attached; then compare their CIDRs from `describe-vpcs` to ensure no overlap.
+
+#### How to check org policy / IPAM in CloudShell
+
+If your org uses AWS VPC IPAM, check pools/allocations:
+
+```bash
+aws ec2 describe-ipams --region "$AWS_REGION" --output table
+aws ec2 describe-ipam-pools --region "$AWS_REGION" --output table
+```
+
+If these return nothing (or access denied), your org may not use IPAM in that account/region, or your role cannot read it. In that case, confirm allowed CIDR ranges with your network/platform team.
+
+If `describe-ipam-pools` output only shows the header (for example `DescribeIpamPools`) with no rows, it means no pools are visible in this account/region or your role lacks read permission.
+
 ### Secrets (Settings → Actions → Secrets)
 
 | Secret | Description |
