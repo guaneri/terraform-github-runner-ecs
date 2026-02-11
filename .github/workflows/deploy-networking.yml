@@ -26,10 +26,21 @@ on:
         options:
           - plan
           - deploy
+  # Temporary/CI trigger: allows pre-merge validation from PRs to main.
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/deploy-networking.yml'
+      - 'modules/networking/**'
+      - 'main.tf'
+      - 'variables.tf'
+      - 'outputs.tf'
 
 jobs:
   terraform-networking:
-    name: Terraform networking ${{ github.event.inputs.action }}
+    name: Terraform networking ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.action || 'plan' }}
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
 
     permissions:
@@ -60,7 +71,7 @@ jobs:
           role-to-assume: arn:aws:iam::${{ secrets.SHARED_AWS_ACCOUNT_ID }}:role/${{ secrets.SHARED_AWS_ROLE_NAME }}
           role-duration-seconds: 7200
           aws-region: ${{ vars.SHARED_AWS_REGION }}
-          role-session-name: GitHubActions-Networking-${{ github.event.inputs.action }}
+          role-session-name: GitHubActions-Networking-${{ github.run_id }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -81,11 +92,11 @@ jobs:
         run: terraform validate
 
       - name: Terraform Plan (networking only)
-        if: github.event.inputs.action == 'plan' || github.event.inputs.action == 'deploy'
+        if: github.event_name == 'pull_request' || github.event.inputs.action == 'plan' || github.event.inputs.action == 'deploy'
         run: |
           set -euo pipefail
           terraform plan -target=module.networking -out=tfplan
 
       - name: Terraform Apply (networking only)
-        if: github.event.inputs.action == 'deploy'
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'deploy'
         run: terraform apply -auto-approve tfplan
