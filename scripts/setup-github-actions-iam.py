@@ -20,6 +20,7 @@ from botocore.exceptions import ClientError
 
 OIDC_URL = "https://token.actions.githubusercontent.com"
 OIDC_AUDIENCE = "sts.amazonaws.com"
+GITHUB_ACTIONS_ROLE_MAX_SESSION_DURATION = 7200
 
 
 def get_oidc_thumbprint(url: str) -> str:
@@ -114,7 +115,13 @@ def create_github_actions_role(iam, env: dict[str, str]) -> None:
     }
     try:
         iam.get_role(RoleName=role_name)
-        print(f"Role '{role_name}' already exists; updating assume-role policy and inline policy.")
+        print(
+            f"Role '{role_name}' already exists; updating assume-role policy, inline policy, and max session duration.",
+        )
+        iam.update_role(
+            RoleName=role_name,
+            MaxSessionDuration=GITHUB_ACTIONS_ROLE_MAX_SESSION_DURATION,
+        )
         iam.update_assume_role_policy(RoleName=role_name, PolicyDocument=json.dumps(trust_policy))
         iam.put_role_policy(
             RoleName=role_name,
@@ -129,6 +136,7 @@ def create_github_actions_role(iam, env: dict[str, str]) -> None:
         RoleName=role_name,
         AssumeRolePolicyDocument=json.dumps(trust_policy),
         Description="Role for GitHub Actions to assume via OIDC (no long-lived credentials).",
+        MaxSessionDuration=GITHUB_ACTIONS_ROLE_MAX_SESSION_DURATION,
     )
     iam.put_role_policy(
         RoleName=role_name,
@@ -136,7 +144,10 @@ def create_github_actions_role(iam, env: dict[str, str]) -> None:
         PolicyDocument=json.dumps(assume_state_and_exec),
     )
     iam.attach_role_policy(RoleName=role_name, PolicyArn="arn:aws:iam::aws:policy/AdministratorAccess")
-    print(f"Created role '{role_name}' with AssumeStateAndExec and AdministratorAccess.")
+    print(
+        f"Created role '{role_name}' with AssumeStateAndExec, AdministratorAccess, and MaxSessionDuration="
+        f"{GITHUB_ACTIONS_ROLE_MAX_SESSION_DURATION}.",
+    )
 
 
 def create_state_role(iam, env: dict[str, str]) -> None:

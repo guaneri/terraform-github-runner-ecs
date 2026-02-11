@@ -39,6 +39,12 @@ variable "vpc_cidr" {
   default     = ""
 }
 
+variable "vpc_additional_cidrs" {
+  description = "Optional additional IPv4 CIDR blocks for the created VPC when create_networking is true (for example [\"10.41.0.0/16\"])."
+  type        = list(string)
+  default     = []
+}
+
 # Availability zone names for subnets when create_networking is true (e.g. [\"us-east-1a\", \"us-east-1d\"]). Required when create_networking is true.
 variable "networking_azs" {
   description = "List of availability zone names where private subnets will be created when create_networking is true. Use at least two AZs for high availability."

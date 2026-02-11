@@ -626,7 +626,8 @@ If you want this repo to **create** the VPC, private subnets, **Transit Gateway*
 | Name | Tab | What to Enter | Example | When |
 |------|-----|---------------|---------|------|
 | `SHARED_CREATE_NETWORKING` | **Variables** | `true` to create VPC, subnets, Transit Gateway, attachment, and routes | `true` | Required when you want the repo to create networking. Omit or set `false` when using your own VPC/subnets. |
-| `SHARED_VPC_CIDR` | **Variables** | CIDR block for the created VPC: the IP range for the VPC in slash notation (e.g. `/16` = 65,536 addresses). Use a private range (e.g. `10.x.x.x`, `172.16–31.x.x`, `192.168.x.x`) that does not overlap with other networks you need to reach. | `10.0.0.0/16` | Required when creating networking so Terraform knows the VPC address space. Generic values like `10.0.0.0/16` are safe to use in docs and Variables (they do not identify your account). |
+| `SHARED_VPC_CIDR` | **Variables** | Primary CIDR block for the created VPC. AWS VPC primary CIDRs must be between `/16` and `/28`. Use a private range that does not overlap with other networks you need to reach. | `10.40.0.0/16` | Required when creating networking so Terraform knows the primary VPC CIDR. |
+| `SHARED_VPC_ADDITIONAL_CIDRS` | **Variables** | Optional JSON array of additional VPC CIDRs to associate after VPC creation. Use this when you want more address space (for example a second `/16`). | `["10.41.0.0/16"]` | Optional. Set to `[]` or leave unset if you only want one CIDR block. |
 | `SHARED_NETWORKING_AZS` | **Variables** | JSON array of availability zone names (e.g. two AZs in your region) so subnets are created in each. Ensures runners span AZs for availability. | `["us-east-1a","us-east-1d"]` | Required when creating networking. Must be valid JSON; region AZ codes are generic and safe for public repos. |
 
 ### How to choose `SHARED_VPC_CIDR`
@@ -644,12 +645,13 @@ Address space sizing:
 
 - A `/16` has 65,536 total IPs.
 - In AWS, each subnet reserves 5 IPs, but VPC-level CIDR capacity is still that size envelope.
-- Two `/16`s (`10.40.0.0/16` + `10.41.0.0/16`) give you about 131,072 total addresses.
-- Equivalent single block: `10.40.0.0/15` (also ~131,072 addresses).
+- Two `/16`s (`10.40.0.0/16` + `10.41.0.0/16`) give you about 131,072 total addresses in one VPC.
+- AWS does not allow a VPC primary CIDR of `/15`, so use a primary `/16` plus one additional `/16` if you need that headroom.
 
 Recommendation:
 
-- If you want extra headroom, pick a non-overlapping `/15` for this runner VPC.
+- Start with a non-overlapping `/16` in `SHARED_VPC_CIDR`.
+- If you want extra headroom, add another non-overlapping `/16` in `SHARED_VPC_ADDITIONAL_CIDRS`.
 
 Why you might need that much:
 
@@ -657,11 +659,11 @@ Why you might need that much:
 - Room to expand without adding secondary CIDRs later.
 - Cleaner long-term network planning in shared environments.
 
-Benefits of starting with `/15`:
+Benefits of using two `/16`s from day one:
 
-- More free address space from day one.
+- More free address space from day one (about 131,072 total).
 - Fewer future rework events (subnet pressure, CIDR expansion planning).
-- Simpler operations versus adding a second CIDR block later.
+- Aligns with AWS VPC CIDR constraints (`/16` to `/28` per CIDR association).
 
 Check in AWS Console:
 
@@ -728,9 +730,9 @@ If these return nothing (or access denied), your org may not use IPAM in that ac
 
 Good vs bad examples:
 
-- Good: existing VPCs are `10.40.0.0/16` and `10.41.0.0/16`, choose a non-overlapping `/15` such as `10.42.0.0/15` (if your network policy allows it).
-- Bad: choosing `10.40.0.0/16` again when a VPC already uses that CIDR, or choosing a `/15` that overlaps existing/connected networks.
-- Policy check: confirm `/15` is allowed by your org network standards or IPAM pool constraints before deploy.
+- Good: set `SHARED_VPC_CIDR=10.42.0.0/16` and `SHARED_VPC_ADDITIONAL_CIDRS=["10.43.0.0/16"]` when both are non-overlapping.
+- Bad: choosing `10.40.0.0/16` again when a VPC already uses that CIDR, or adding a secondary CIDR that overlaps existing/connected networks.
+- Policy check: confirm both `/16` CIDRs are allowed by your org network standards or IPAM pool constraints before deploy.
 
 ### Detailed CIDR selection walkthrough
 
@@ -771,7 +773,8 @@ aws ec2 describe-vpcs \
   --output text
 ```
 
-Pick a non-overlapping `/15` (for headroom), for example `10.60.0.0/15`, only if both halves (`10.60.0.0/16` and `10.61.0.0/16`) are not already used or connected.
+Pick a non-overlapping primary `/16` for `SHARED_VPC_CIDR` (for example `10.60.0.0/16`).  
+If you need more headroom, add a second non-overlapping `/16` in `SHARED_VPC_ADDITIONAL_CIDRS` (for example `["10.61.0.0/16"]`).
 
 #### How to pick AZs (`SHARED_NETWORKING_AZS`)
 
@@ -926,7 +929,7 @@ In your GitHub repository, click on the **Actions** tab.
 - Starting your first runner
 - If **create networking** is enabled (`SHARED_CREATE_NETWORKING` = `true`), it creates the VPC, subnets, and Transit Gateway first, then deploys into them
 - You can also run the **Deploy networking only** workflow (separate state file) to create or change just the networking without touching the main deployment; see [.github/workflows/deploy-networking-README.md](.github/workflows/deploy-networking-README.md)
-- When create networking is used, Terraform outputs include `networking_vpc_id`, `networking_subnet_ids`, and `networking_transit_gateway_id` (visible after apply or via `terraform output`).
+- When create networking is used, Terraform outputs include `networking_vpc_id`, `networking_vpc_cidrs`, `networking_subnet_ids`, and `networking_transit_gateway_id` (visible after apply or via `terraform output`).
 
 **Important:**
 - This step costs money (you're creating AWS resources)

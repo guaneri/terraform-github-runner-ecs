@@ -115,6 +115,7 @@ jobs:
       # Optional: create VPC, subnets, Transit Gateway (set SHARED_CREATE_NETWORKING=true and SHARED_VPC_CIDR, SHARED_NETWORKING_AZS)
       TF_VAR_create_networking: ${{ vars.SHARED_CREATE_NETWORKING || 'false' }}
       TF_VAR_vpc_cidr: ${{ vars.SHARED_VPC_CIDR }}
+      TF_VAR_vpc_additional_cidrs: ${{ vars.SHARED_VPC_ADDITIONAL_CIDRS || '[]' }}
       TF_VAR_networking_azs: ${{ vars.SHARED_NETWORKING_AZS }}
       # When create_networking is false, set SHARED_VPC_ID and SHARED_SUBNETS; when true, leave them unset/empty
       TF_VAR_vpc_id: ${{ secrets.SHARED_VPC_ID }}

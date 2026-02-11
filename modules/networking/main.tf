@@ -10,6 +10,10 @@
 #
 ################################################################################
 
+locals {
+  all_vpc_cidrs = concat([var.vpc_cidr], var.vpc_additional_cidrs)
+}
+
 # Transit Gateway: regional gateway for routing; this repo creates it.
 resource "aws_ec2_transit_gateway" "main" {
   description                     = "Transit Gateway for GitHub runner VPC egress (created by terraform-github-runner-ecs)"
@@ -30,12 +34,25 @@ resource "aws_vpc" "main" {
   }
 }
 
+# Optional additional VPC CIDRs (for example a second /16 block).
+resource "aws_vpc_ipv4_cidr_block_association" "additional" {
+  count = length(var.vpc_additional_cidrs)
+
+  vpc_id     = aws_vpc.main.id
+  cidr_block = var.vpc_additional_cidrs[count.index]
+}
+
 # One private subnet per AZ; CIDR is derived from VPC CIDR so no overlap.
 resource "aws_subnet" "private" {
   count             = length(var.networking_azs)
   vpc_id            = aws_vpc.main.id
   availability_zone = var.networking_azs[count.index]
-  cidr_block        = cidrsubnet(var.vpc_cidr, 4, count.index)
+  cidr_block = cidrsubnet(
+    local.all_vpc_cidrs[count.index % length(local.all_vpc_cidrs)],
+    4,
+    floor(count.index / length(local.all_vpc_cidrs)),
+  )
+  depends_on = [aws_vpc_ipv4_cidr_block_association.additional]
   tags = {
     Name = "${var.name_prefix}-private-${var.networking_azs[count.index]}"
   }
@@ -46,8 +63,8 @@ resource "aws_ec2_transit_gateway_vpc_attachment" "main" {
   transit_gateway_id = aws_ec2_transit_gateway.main.id
   vpc_id             = aws_vpc.main.id
   subnet_ids         = aws_subnet.private[*].id
-  dns_support         = "enable"
-  ipv6_support        = "disable"
+  dns_support        = "enable"
+  ipv6_support       = "disable"
   tags = {
     Name = "${var.name_prefix}-tgw-attach"
   }

@@ -54,6 +54,7 @@ jobs:
       # Networking: create VPC, subnets, TGW; all from Variables (no hardcoded values).
       TF_VAR_create_networking: 'true'
       TF_VAR_vpc_cidr: ${{ vars.SHARED_VPC_CIDR }}
+      TF_VAR_vpc_additional_cidrs: ${{ vars.SHARED_VPC_ADDITIONAL_CIDRS || '[]' }}
       TF_VAR_networking_azs: ${{ vars.SHARED_NETWORKING_AZS }}
       TF_VAR_aws_region: ${{ vars.SHARED_AWS_REGION }}
       TF_VAR_aws_account_id: ${{ secrets.SHARED_AWS_ACCOUNT_ID }}

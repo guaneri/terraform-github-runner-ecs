@@ -12,6 +12,12 @@ variable "vpc_cidr" {
   type        = string
 }
 
+variable "vpc_additional_cidrs" {
+  description = "Optional additional IPv4 CIDR blocks to associate to the VPC after creation (for example [\"10.41.0.0/16\"])."
+  type        = list(string)
+  default     = []
+}
+
 variable "networking_azs" {
   description = "List of availability zone names (e.g. [\"us-east-1a\", \"us-east-1d\"]) where private subnets will be created. Use at least two AZs for high availability."
   type        = list(string)

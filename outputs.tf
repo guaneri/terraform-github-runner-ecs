@@ -94,6 +94,11 @@ output "networking_vpc_id" {
   value       = var.create_networking ? module.networking[0].vpc_id : null
 }
 
+output "networking_vpc_cidrs" {
+  description = "IPv4 CIDR blocks associated with the VPC created by the networking module. Set only when create_networking is true."
+  value       = var.create_networking ? module.networking[0].vpc_cidrs : null
+}
+
 output "networking_subnet_ids" {
   description = "IDs of the subnets created by the networking module. Set only when create_networking is true."
   value       = var.create_networking ? module.networking[0].subnet_ids : null

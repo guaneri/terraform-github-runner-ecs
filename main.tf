@@ -111,6 +111,15 @@ resource "terraform_data" "validate_inputs" {
       condition     = !var.create_networking || (trimspace(var.vpc_cidr) != "" && length(var.networking_azs) > 0)
       error_message = "When create_networking is true, vpc_cidr and networking_azs must both be set."
     }
+
+    # Optional additional CIDRs must be non-empty and unique.
+    precondition {
+      condition = !var.create_networking || (
+        alltrue([for c in var.vpc_additional_cidrs : trimspace(c) != ""]) &&
+        length(distinct(concat([var.vpc_cidr], var.vpc_additional_cidrs))) == length(var.vpc_additional_cidrs) + 1
+      )
+      error_message = "When create_networking is true, vpc_additional_cidrs must not contain empty or duplicate CIDR values."
+    }
   }
 }
 
@@ -120,9 +129,10 @@ module "networking" {
   count  = var.create_networking ? 1 : 0
   source = "./modules/networking"
 
-  vpc_cidr        = var.vpc_cidr
-  networking_azs  = var.networking_azs
-  name_prefix     = coalesce(trimspace(var.infra_name_prefix), var.cluster_name)
+  vpc_cidr             = var.vpc_cidr
+  vpc_additional_cidrs = var.vpc_additional_cidrs
+  networking_azs       = var.networking_azs
+  name_prefix          = coalesce(trimspace(var.infra_name_prefix), var.cluster_name)
 }
 
 # Infrastructure module
@@ -175,8 +185,8 @@ module "runner_service" {
   launch_type            = var.launch_type                                # ECS launch type: "EC2" or "FARGATE"
   capacity_provider_name = module.runner_infra.ec2_capacity_provider_name # Name of the EC2 capacity provider (from runner_infra module output)
 
-  vpc_id             = local.effective_vpc_id                                               # VPC: from networking module when create_networking, else var.vpc_id
-  subnets            = local.effective_subnets                                              # Subnets: from networking module when create_networking, else var.subnets
+  vpc_id             = local.effective_vpc_id                                              # VPC: from networking module when create_networking, else var.vpc_id
+  subnets            = local.effective_subnets                                             # Subnets: from networking module when create_networking, else var.subnets
   security_group_ids = coalescelist(each.value.security_group_ids, var.security_group_ids) # Service-specific security groups, or fallback to top-level
   assign_public_ip   = false                                                               # Whether to assign public IP addresses to tasks (usually false)
 
