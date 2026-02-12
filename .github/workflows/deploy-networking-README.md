@@ -4,7 +4,7 @@ This document describes the **Deploy networking only** GitHub Actions workflow (
 
 ## What it does
 
-- **Trigger:** Manual only (`workflow_dispatch`). No push or PR triggers.
+- **Trigger:** Manual (`workflow_dispatch`) plus PR validation (`pull_request` to `main` for networking-related files).
 - **Actions:** You choose **plan** or **deploy** when you run the workflow.
 - **Scope:** Runs Terraform with `-target=module.networking` so only the networking module is planned or applied.
 - **State:** Uses its own S3 state key (from the `TF_NETWORKING_STATE_KEY` variable), so the main deployment state (used by `deployment.yml`) is not modified.
@@ -47,7 +47,8 @@ All configuration comes from **GitHub Settings → Secrets and variables → Act
 
 | Variable | Example | Description |
 |----------|---------|-------------|
-| `SHARED_VPC_CIDR` | `10.0.0.0/16` | CIDR block for the VPC. Use a private range that does not overlap with other networks. |
+| `SHARED_VPC_CIDR` | `10.40.0.0/16` | Primary CIDR block for the VPC. AWS VPC primary CIDRs must be between `/16` and `/28`. Use a private range that does not overlap with other networks. |
+| `SHARED_VPC_ADDITIONAL_CIDRS` | `["10.41.0.0/16"]` | Optional JSON array of additional VPC CIDRs to associate after VPC creation. Use this for extra address space (for example, a second `/16`). |
 | `SHARED_NETWORKING_AZS` | `["us-east-1a","us-east-1d"]` | JSON array of availability zone names. Use at least two AZs for high availability. Must be valid JSON (e.g. `["us-east-1a","us-east-1d"]`). |
 | `TF_NETWORKING_STATE_KEY` | `github-runner-networking/terraform.tfstate` | S3 object key for the Terraform state file used by this workflow. Must be different from the main deployment state key. |
 | `SHARED_AWS_REGION` | `us-east-1` | AWS region where resources are created. |
@@ -68,12 +69,13 @@ Address space sizing:
 
 - A `/16` has 65,536 total IPs.
 - In AWS, each subnet reserves 5 IPs, but VPC-level CIDR capacity is still that size envelope.
-- Two `/16`s (`10.40.0.0/16` + `10.41.0.0/16`) give you about 131,072 total addresses.
-- Equivalent single block: `10.40.0.0/15` (also ~131,072 addresses).
+- Two `/16`s (`10.40.0.0/16` + `10.41.0.0/16`) give you about 131,072 total addresses in one VPC.
+- AWS does not allow a VPC primary CIDR of `/15`, so use a primary `/16` plus one additional `/16` if you need that headroom.
 
 Recommendation:
 
-- If you want extra headroom, pick a non-overlapping `/15` for this runner VPC.
+- Start with a non-overlapping `/16` in `SHARED_VPC_CIDR`.
+- If you want extra headroom, add another non-overlapping `/16` in `SHARED_VPC_ADDITIONAL_CIDRS`.
 
 Why you might need that much:
 
@@ -81,11 +83,11 @@ Why you might need that much:
 - Room to expand without adding secondary CIDRs later.
 - Cleaner long-term network planning in shared environments.
 
-Benefits of starting with `/15`:
+Benefits of using two `/16`s from day one:
 
 - More free address space from day one.
 - Fewer future rework events (subnet pressure, CIDR expansion planning).
-- Simpler operations versus adding a second CIDR block later.
+- Aligns with AWS VPC CIDR constraints (`/16` to `/28` per CIDR association).
 
 Check in AWS Console:
 
@@ -135,7 +137,13 @@ Choose a block that is:
 
 What is RFC1918?
 
-RFC1918 means private, non-internet-routable IP ranges reserved for internal networks. In AWS VPCs, you should use these private ranges for CIDRs.
+RFC1918 private IPv4 ranges:
+
+- `10.0.0.0/8` (10.0.0.0 - 10.255.255.255)
+- `172.16.0.0/12` (172.16.0.0 - 172.31.255.255)
+- `192.168.0.0/16` (192.168.0.0 - 192.168.255.255)
+
+In AWS VPCs, use CIDRs from one of these private ranges.
 
 Did we already run a TGW check?
 
@@ -152,9 +160,9 @@ If these return nothing (or access denied), your org may not use IPAM in that ac
 
 Good vs bad examples:
 
-- Good: existing VPCs are `10.40.0.0/16` and `10.41.0.0/16`, choose a non-overlapping `/15` such as `10.42.0.0/15` (if your network policy allows it).
-- Bad: choosing `10.40.0.0/16` again when a VPC already uses that CIDR, or choosing a `/15` that overlaps existing/connected networks.
-- Policy check: confirm `/15` is allowed by your org network standards or IPAM pool constraints before deploy.
+- Good: set `SHARED_VPC_CIDR=10.42.0.0/16` and `SHARED_VPC_ADDITIONAL_CIDRS=["10.43.0.0/16"]` when both are non-overlapping.
+- Bad: choosing `10.40.0.0/16` again when a VPC already uses that CIDR, or adding a secondary CIDR that overlaps existing/connected networks.
+- Policy check: confirm both `/16` CIDRs are allowed by your org network standards or IPAM pool constraints before deploy.
 
 ### Detailed CIDR selection walkthrough
 
@@ -195,7 +203,8 @@ aws ec2 describe-vpcs \
   --output text
 ```
 
-Pick a non-overlapping `/15` (for headroom), for example `10.60.0.0/15`, only if both halves (`10.60.0.0/16` and `10.61.0.0/16`) are not already used or connected.
+Pick a non-overlapping primary `/16` for `SHARED_VPC_CIDR` (for example `10.60.0.0/16`).  
+If you need more headroom, add a second non-overlapping `/16` in `SHARED_VPC_ADDITIONAL_CIDRS` (for example `["10.61.0.0/16"]`).
 
 #### How to know which CIDR to pick
 
@@ -217,7 +226,13 @@ Why those ranges (they are not random):
 
 #### What is RFC1918?
 
-RFC1918 means private, non-internet-routable IP ranges reserved for internal networks. In AWS VPCs, you should use these private ranges for CIDRs.
+RFC1918 private IPv4 ranges:
+
+- `10.0.0.0/8` (10.0.0.0 - 10.255.255.255)
+- `172.16.0.0/12` (172.16.0.0 - 172.31.255.255)
+- `192.168.0.0/16` (192.168.0.0 - 192.168.255.255)
+
+In AWS VPCs, use CIDRs from one of these private ranges.
 
 #### Did we already run a TGW check?
 
@@ -248,10 +263,16 @@ If `describe-ipam-pools` output only shows the header (for example `DescribeIpam
 
 - **Separate state:** This workflow uses `TF_NETWORKING_STATE_KEY`; the main deployment workflow uses `TF_STATE_KEY`. They do not share state.
 - **No runner secrets:** This workflow uses placeholder `runner_services` so it can run without GitHub org or runner token secrets. Only the networking module is targeted.
-- **Full deployment:** To deploy runners into the networking created here, run the main **Multi-Org github runner Deployment** workflow with `create_networking` and the same `SHARED_VPC_CIDR` and `SHARED_NETWORKING_AZS` (and the same backend bucket if you want Terraform to manage the same networking resources from the main state). Alternatively, you can use this workflow only to create networking once with its own state, then use the main workflow with **bring your own** VPC/subnets (using the created VPC and subnet IDs from this workflow’s outputs or from AWS).
+- **Full deployment:** To deploy runners into the networking created here, run the main **Multi-Org github runner Deployment** workflow with `create_networking` and the same `SHARED_VPC_CIDR`, `SHARED_NETWORKING_AZS`, and optional `SHARED_VPC_ADDITIONAL_CIDRS` (and the same backend bucket if you want Terraform to manage the same networking resources from the main state). Alternatively, you can use this workflow only to create networking once with its own state, then use the main workflow with **bring your own** VPC/subnets (using the created VPC and subnet IDs from this workflow’s outputs or from AWS).
 
 ## Troubleshooting
 
-- **Plan/apply fails on variables:** Ensure `SHARED_VPC_CIDR`, `SHARED_NETWORKING_AZS`, `TF_NETWORKING_STATE_KEY`, and `SHARED_AWS_REGION` are set. `SHARED_NETWORKING_AZS` must be a JSON array string, e.g. `["us-east-1a","us-east-1d"]`.
+- **Preflight account/region check first:** In AWS Access Portal environments, confirm you opened the intended account and that the AWS Console region selector matches `SHARED_AWS_REGION`. In CloudShell, run:
+  ```bash
+  aws sts get-caller-identity --query Account --output text
+  aws configure get region
+  ```
+  If an error includes **"explicit deny in a service control policy"**, treat it as account/region/SCP scope first (not a networking module bug).
+- **Plan/apply fails on variables:** Ensure `SHARED_VPC_CIDR`, `SHARED_NETWORKING_AZS`, `TF_NETWORKING_STATE_KEY`, and `SHARED_AWS_REGION` are set. If used, `SHARED_VPC_ADDITIONAL_CIDRS` must be a JSON array string (for example `["10.41.0.0/16"]`). `SHARED_NETWORKING_AZS` must be a JSON array string, e.g. `["us-east-1a","us-east-1d"]`.
 - **AWS permission errors:** The role specified in `SHARED_AWS_ROLE_NAME` needs permissions to create and manage EC2 VPCs, subnets, and Transit Gateway resources (e.g. `ec2:CreateVpc`, `ec2:CreateSubnet`, `ec2:CreateTransitGateway`, and related APIs).
 - **Backend errors:** Confirm `TF_BACKEND_BUCKET` exists, is in the same region as `SHARED_AWS_REGION`, and the OIDC role has `s3:GetObject`, `s3:PutObject`, and (if using locking) `dynamodb:*` on the state bucket/key and optional DynamoDB table.

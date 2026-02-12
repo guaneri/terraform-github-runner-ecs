@@ -20,12 +20,27 @@ The script also creates the GitHub OIDC identity provider in IAM (`token.actions
 
 The script reads all configuration from **environment variables**. There are no account IDs, bucket names, GitHub org/repo names, or role names in the script.
 
+### How to read variable names in this README
+
+When you see names like `TF_BACKEND_BUCKET`, `AWS_ACCOUNT_ID`, or `GITHUB_ACTIONS_ROLE` in this document:
+
+- These are **variable keys** (labels), not literal values you must name resources after.
+- You provide the real value in your shell session, for example:
+  - `TF_BACKEND_BUCKET=your-actual-bucket-name`
+  - `GITHUB_ACTIONS_ROLE=github-actions-role`
+- Later, some of those values are copied into GitHub Secrets/Variables with their own key names.
+
 ### What must already exist (before you run the script)
 
 The script only creates IAM roles and the OIDC provider. It does **not** create the S3 bucket or any other resources. Have the following in place before you run the script:
 
 1. **S3 bucket for Terraform state**  
-   The bucket named in `TF_BACKEND_BUCKET` must already exist. The script grants the state role permission to read/write that bucket; it does not create the bucket. Create the bucket in the same account and region you will use for Terraform. Enable **versioning** on the bucket (recommended for Terraform state).
+   The bucket whose name you put in `TF_BACKEND_BUCKET` must already exist. `TF_BACKEND_BUCKET` is just the shell variable name; the value should be your real S3 bucket name. The script grants the state role permission to read/write that bucket; it does not create the bucket. Create the bucket in the same account and region you will use for Terraform. Enable **versioning** on the bucket (recommended for Terraform state).
+   
+   S3 bucket naming rules to avoid common errors:
+   - Use lowercase letters, numbers, and hyphens only.
+   - Do not use uppercase letters or underscores.
+   - Bucket names are globally unique across AWS, so you may need to pick a different name if one already exists.
 
    **Create the bucket:**
    - **Console:** S3 → **Create bucket** → choose a bucket name (this will be your `TF_BACKEND_BUCKET` value), select the correct region → **Create bucket**.
@@ -47,7 +62,7 @@ The script only creates IAM roles and the OIDC provider. It does **not** create 
    The state role trust policy uses `aws:PrincipalOrgID`, so your AWS account must be part of an **AWS Organization**. You will need the organization ID for the `AWS_ORGANIZATION_ID` variable (format looks like `o-xxxxxxxxxx`). If your account is standalone (not in an org), this trust condition will not work; use an account that is in an organization, or you would need to change the trust policy outside this script.
 
 3. **Values for the required variables**  
-   You need a value for each of the eight required environment variables. See [Required environment variables](#required-environment-variables) below for the full list, what each one means, and where to get the values (e.g. GitHub org/repo, AWS account ID, AWS Organization ID, S3 bucket name, and the three role names). The GitHub repo itself can exist before or after you run the script; the OIDC trust will apply to that org/repo once the workflow runs.
+   You need a value for each of the eight required environment variables. See [Required environment variables](#required-environment-variables-for-running-the-script) below for the full list, what each one means, and where to get the values (e.g. GitHub org/repo, AWS account ID, AWS Organization ID, S3 bucket name, and the three role names). The GitHub repo itself can exist before or after you run the script; the OIDC trust will apply to that org/repo once the workflow runs.
 
 ### Prerequisites to run the script
 
@@ -74,13 +89,19 @@ Before running the script, ensure:
 - **AWS CloudShell** (recommended): Open it from the account where you want the roles; it has AWS credentials and Python. Install boto3 if needed (`pip install boto3`).
 - Any environment where you have AWS credentials and Python 3 with boto3.
 
-### Required environment variables
+### Required environment variables (for running the script)
 
 All of the following must be set (no defaults). The script exits with an error if any are missing.
 
+Important:
+- These are **shell environment variables** you set in CloudShell (or your terminal) right before running the Python script.
+- These are **not** GitHub repository Variables/Secrets.
+- After the script runs, copy the relevant values into GitHub **Secrets** in step 5.
+- For exactly how to set them in your shell session, see step 3 in [Example: run in CloudShell](#example-run-in-cloudshell).
+
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
-| `TF_BACKEND_BUCKET` | S3 bucket name for Terraform state (same value you will set in GitHub as the `TF_BACKEND_BUCKET` secret). | Name of the S3 bucket you created (see step 1 above). |
+| `TF_BACKEND_BUCKET` | S3 bucket name for Terraform state (same value you will set in GitHub as the `TF_BACKEND_BUCKET` secret). This is a variable name; set its value to your real bucket name. | Name of the S3 bucket you created (see step 1 above). |
 | `GITHUB_ORG` | GitHub organization or user that owns the repo (no URL, just the name). | From the repo URL when you're on the repo main page: `https://github.com/ORG/REPO` → use the **ORG** part. |
 | `GITHUB_REPO` | Repository name. | From the repo URL when you're on the repo main page: `https://github.com/ORG/REPO` → use the **REPO** part. |
 | `AWS_ORGANIZATION_ID` | AWS Organizations ID (used in state role trust condition `aws:PrincipalOrgID`). | AWS Console → **Organizations**; or in **CloudShell** run: `aws organizations describe-organization --query Organization.Id --output text` (paste only the command, not the backticks, or you get "command not found"). |
@@ -104,13 +125,18 @@ All of the following must be set (no defaults). The script exits with an error i
      ```
    - The script is now at `scripts/setup-github-actions-iam.py`. In step 4 you will run: `python3 scripts/setup-github-actions-iam.py`.
 
-   **Option B: Upload the script (no git)**  
-   CloudShell may only show **Actions** (gear icon) → **Upload file**. In GitHub open `scripts/setup-github-actions-iam.py` → **Raw**, save the page as `setup-github-actions-iam.py` on your machine, then upload that file via **Upload file**. In the terminal, confirm you're in the directory that contains it (e.g. `ls setup-github-actions-iam.py`). In step 4 you will run: `python3 setup-github-actions-iam.py` (no `scripts/` prefix).
+  **Option B: Upload the script (no git)**  
+  1. In GitHub, open `scripts/setup-github-actions-iam.py`.
+  2. Click **Raw** and save it on your machine as `setup-github-actions-iam.py`.
+  3. In CloudShell, open the **Actions** dropdown (sometimes shown as a gear icon), then click **Upload file**.
+  4. Select your saved `setup-github-actions-iam.py` file and upload it.
+  5. In the terminal, confirm the file is present (for example, `ls setup-github-actions-iam.py`).
+  6. In step 4 below, run: `python3 setup-github-actions-iam.py` (no `scripts/` prefix).
 
-3. Set all required environment variables (replace with your values). See [Required environment variables](#required-environment-variables) for the full list and what each variable is.
+3. Set all required environment variables in the terminal (replace with your values). These are temporary shell variables for the script run, not GitHub repo variables. See [Required environment variables](#required-environment-variables-for-running-the-script) for the full list and what each variable is.
 
    ```bash
-   export TF_BACKEND_BUCKET=YOUR_BUCKET_NAME
+   export TF_BACKEND_BUCKET=your-actual-s3-bucket-name
    export GITHUB_ORG=YOUR_GITHUB_ORG
    export GITHUB_REPO=YOUR_REPO_NAME
    export AWS_ORGANIZATION_ID=YOUR_ORG_ID

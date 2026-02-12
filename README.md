@@ -338,7 +338,7 @@ The following diagram shows how IAM roles, trust policies, and security groups a
 
 Before you begin, make sure you have:
 
-1. **An AWS Account** - You'll need access to create resources
+1. **An AWS Account** - You'll need access to create resources. In most cases, your client/team provides this (or gives you a sandbox account). If you were not given an account, create one here: https://signin.aws.amazon.com/signup?request_type=register
 2. **AWS CLI Installed** - A tool to talk to AWS from your computer
    - Download: https://aws.amazon.com/cli/
    - After installing, run: `aws configure` to set up your credentials
@@ -358,6 +358,8 @@ Follow these steps in order. Don't skip ahead - each step depends on the previou
 
 **Goal:** You should be able to **fork this repository**, fill in your own GitHub **Secrets** and **Variables**, and run the included GitHub Actions workflows to validate everything works.
 
+To implement this GitHub runner, all you have to do is fork the repo, add the GitHub variables and secrets, and test them in Actions for the two workflows.
+
 **Forking:**
 - Fork this repository into your own GitHub org/user.
 - Do your setup work (Secrets/Variables) in **your fork**.
@@ -376,8 +378,11 @@ Follow these steps in order. Don't skip ahead - each step depends on the previou
 
 You'll need two pieces of information from AWS:
 
+If your organization uses the **AWS Access Portal**, that is how you choose/sign in to an account. Once you open an account in the browser, the website UI you are using is the **AWS Console** (same thing in this README).
+
 1. **Your AWS Account ID** - A 12-digit number
    - Find it: Log into AWS Console → Click your username (top right) → The account ID is shown there
+   - If it is not shown in the top-right menu for your login/session, get it from the AWS Access Portal account tile/details for the account you opened.
    - Or run: `aws sts get-caller-identity --query Account --output text`
 
 2. **Your AWS Region** - Where you want to create everything (e.g., `us-east-1`, `us-west-2`, `eu-west-1`)
@@ -404,8 +409,8 @@ The workflow requires you to set up GitHub repository secrets and variables. Her
 | Secret Name | Example Value | Why You Need This | Where to Get This |
 |------------|---------------|-------------------|-------------------|
 | `SHARED_AWS_ACCOUNT_ID` | `123456789012` | Used to construct ARNs and assume IAM roles. The workflow needs this to authenticate with AWS using OIDC. | See Step 1 for instructions. |
-| `SHARED_VPC_ID` | `vpc-0123456789abcdef0` | The runners need to be deployed into a specific VPC (Virtual Private Cloud) for network isolation and security. This tells Terraform which VPC to use. | See Step 3 for instructions. If you don't have access, ask your AWS administrator or network team. |
-| `SHARED_SUBNETS` | `subnet-0123456789abcdef0,subnet-0fedcba9876543210` | Subnets are specific network segments within your VPC. You need at least 2 subnets (preferably in different Availability Zones) for high availability. The runners will be deployed across these subnets. | See Step 3 for instructions. If unsure which subnets to use, ask your AWS administrator - they should be private subnets (not public internet-facing ones). |
+| `SHARED_VPC_ID` | `vpc-0123456789abcdef0` | VPC ID for runner deployment when **bring your own networking** is used (`SHARED_CREATE_NETWORKING=false`). | See Step 3 for instructions. Not needed when `SHARED_CREATE_NETWORKING=true`. |
+| `SHARED_SUBNETS` | `subnet-0123456789abcdef0,subnet-0fedcba9876543210` | Subnet IDs for runner deployment when **bring your own networking** is used (`SHARED_CREATE_NETWORKING=false`). | See Step 3 for instructions. Not needed when `SHARED_CREATE_NETWORKING=true`. |
 | `SHARED_SECURITY_GROUP_IDS` | `sg-0123456789abcdef0` | Security groups act as virtual firewalls controlling inbound and outbound traffic. The runners need appropriate security group rules to communicate with GitHub, AWS services, and your internal resources. | See Step 3 for instructions. If you need to create new security groups, ask your AWS administrator or security team about the required rules (typically: outbound HTTPS to GitHub, outbound HTTPS to AWS APIs, and any internal network access needed). |
 | `SHARED_RUNNER_SERVICE_NAME` | `default`, `production-runners`, `team-a-runners` | This is an identifier for your ECS service. It helps organize multiple runner services if you deploy runners for different teams or environments. Choose a descriptive name that makes sense for your organization. | Pick a name that describes the purpose (e.g., `default` for a single service, `prod-runners` for production, `dev-runners` for development). This is just a label - you decide what makes sense. |
 | `SHARED_GITHUB_ORG` | `my-company`, `acme-corp`, `engineering-team` | This tells the runner which GitHub organization to register with. The runner will appear in that organization's runner list and can execute workflows for repositories in that org. | This is the name that appears in your GitHub organization URL: `https://github.com/YOUR_ORG_NAME`. If you're deploying for a repository instead of an organization, you may need to check with your GitHub administrator about the correct value. |
@@ -418,11 +423,19 @@ The workflow requires you to set up GitHub repository secrets and variables. Her
 | Variable Name | Example Value | Why You Need This | Where to Get This |
 |--------------|---------------|-------------------|-------------------|
 | `SHARED_AWS_REGION` | `us-east-1`, `us-west-2`, `eu-west-1`, `ap-southeast-2` | All AWS resources (ECS cluster, EC2 instances, etc.) will be created in this region. Choose a region close to your users or that meets compliance requirements. | See Step 1 for instructions. If unsure, ask your AWS administrator about your organization's preferred region. |
+| `TF_STATE_KEY` | `github-runner/terraform.tfstate` | S3 object key used by `deployment.yml` Terraform backend state. Must be different from `TF_NETWORKING_STATE_KEY` if you also use `deploy-networking.yml`. | Pick a unique path in your state bucket (for example per env/account). |
+| `SHARED_CREATE_NETWORKING` | `true` or `false` | Controls networking mode in `deployment.yml`: `true` creates VPC/subnets/TGW; `false` uses `SHARED_VPC_ID`/`SHARED_SUBNETS`. | Set based on your deployment mode. |
+| `SHARED_VPC_CIDR` | `10.40.0.0/16` | Primary VPC CIDR when `SHARED_CREATE_NETWORKING=true`. | Choose a private non-overlapping CIDR (`/16` to `/28` for primary VPC CIDR). |
+| `SHARED_VPC_ADDITIONAL_CIDRS` | `["10.41.0.0/16"]` | Optional additional VPC CIDRs when `SHARED_CREATE_NETWORKING=true`. | Optional JSON array; use `[]` or leave unset if not needed. |
+| `SHARED_NETWORKING_AZS` | `["us-east-1a","us-east-1d"]` | AZ list for subnet creation when `SHARED_CREATE_NETWORKING=true`. | Pick at least 2 AZs in your region; must be valid JSON array. |
 | `SHARED_RUNNER_IMAGE` | `123456789012.dkr.ecr.us-east-1.amazonaws.com/github-runner:latest` | This is the Docker image that contains the GitHub Actions runner software. ECS will pull this image and run it as containers on your EC2 instances. | See Step 6 for instructions. The format is: `ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/REPOSITORY_NAME:TAG` |
 | `SHARED_DESIRED_COUNT` | `1`, `2`, `5` | This controls how many runner containers will be running simultaneously. More runners = more workflows can run in parallel, but also higher AWS costs. Start with 1 and increase if you need more parallel capacity. | Consider your typical workflow load. If you have many concurrent workflows, you may need 2-5 runners. If workflows run sequentially, 1 is usually sufficient. You can always change this later and redeploy. |
+| `SHARED_DEPLOYMENT_MIN_HEALTHY_PERCENT` | `100` | Optional ECS deployment setting used in `runner_services`. Defaults to `100` if unset. | Optional tuning value. |
+| `SHARED_DEPLOYMENT_MAXIMUM_PERCENT` | `200` | Optional ECS deployment setting used in `runner_services`. Defaults to `200` if unset. | Optional tuning value. |
 | `SHARED_RUNNER_NAME_PREFIX` | `ecs-github-runner`, `aws-runner-prod`, `team-a-runner` | This prefix appears in the GitHub runner list to help identify your runners. GitHub will append a unique identifier, so you'll see names like `ecs-github-runner-abc123`. | Pick something descriptive that helps you identify these runners in GitHub's UI. Include environment or team info if you have multiple sets of runners (e.g., `prod-runner`, `dev-runner`). |
 | `SHARED_RUNNER_LABELS` | `self-hosted,team-a,ecs,ec2`, `self-hosted,linux,x64,production` | Labels allow you to target specific runners in your GitHub Actions workflows using `runs-on: [label1, label2]`. You can use labels to route workflows to specific runner types, teams, or environments. | Include `self-hosted` (required by GitHub), plus descriptive labels like team names, environment (prod/dev), or capabilities (docker, large, etc.). Common labels: `self-hosted`, `linux`, `x64`, plus your custom labels. Think about how you want to organize workflow routing. |
 | `SHARED_INSTANCE_AMI` | `ami-0123456789abcdef0` (this will be different for each region) | This is the Amazon Machine Image (operating system) that will run on your EC2 instances. The ECS-optimized AMI is pre-configured with Docker and the ECS agent needed to run containers. | See Step 8 for instructions on finding the correct AMI. The AMI ID is different for each region, so make sure you get the one for your specific region. If you're unsure, ask your AWS administrator or use the AWS documentation link provided in Step 8. |
+| `SHARED_CLUSTER_NAME` | `nexus-repo` | Optional cluster/resource naming value used by the workflows. Defaults to `nexus-repo` if unset. | Optional; set only if you want a custom name. |
 
 **What this means:** In the next steps, you'll gather all these values. Then in Step 8, you'll add them to your GitHub repository settings. The workflow will automatically use them when you deploy.
 
@@ -593,8 +606,8 @@ Go to your GitHub repository → **Settings** → **Secrets and variables** → 
 | Secret Name | What to Enter | Example Value | Why You Need This | Where You Got This |
 |------------|---------------|---------------|-------------------|-------------------|
 | `SHARED_AWS_ACCOUNT_ID` | Your 12-digit AWS account ID | `123456789012` | Used by the workflow to construct AWS ARNs and assume IAM roles for authentication | **Step 1** - Found in AWS Console or via `aws sts get-caller-identity` |
-| `SHARED_VPC_ID` | Your VPC ID | `vpc-0123456789abcdef0` | Specifies which VPC network the runners will be deployed into for network isolation | **Step 3** - Found in AWS Console (VPC → Your VPCs). If you don't have this, ask your AWS administrator or network team |
-| `SHARED_SUBNETS` | Comma-separated subnet IDs (no spaces) | `subnet-0123456789abcdef0,subnet-0fedcba9876543210` | Specifies which subnets (network segments) the runners will use. Need at least 2 for high availability | **Step 3** - Found in AWS Console (VPC → Subnets). Ask your AWS administrator which private subnets to use if unsure |
+| `SHARED_VPC_ID` | Your VPC ID | `vpc-0123456789abcdef0` | Required only when **bring your own networking** is used (`SHARED_CREATE_NETWORKING=false`) | **Step 3** - Found in AWS Console (VPC → Your VPCs). Leave unset when `SHARED_CREATE_NETWORKING=true` |
+| `SHARED_SUBNETS` | Comma-separated subnet IDs (no spaces) | `subnet-0123456789abcdef0,subnet-0fedcba9876543210` | Required only when **bring your own networking** is used (`SHARED_CREATE_NETWORKING=false`) | **Step 3** - Found in AWS Console (VPC → Subnets). Leave unset when `SHARED_CREATE_NETWORKING=true` |
 | `SHARED_SECURITY_GROUP_IDS` | Comma-separated security group IDs (no spaces) | `sg-0123456789abcdef0` | Controls network traffic rules (firewall) for the runners. Must allow outbound HTTPS to GitHub and AWS APIs | **Step 3** - Found in AWS Console (VPC → Security Groups). If you need to create new ones, ask your security team about required rules |
 | `SHARED_RUNNER_SERVICE_NAME` | A name for your runner service | `default` or `production-runners` | Identifies this ECS service. Used for organization if you have multiple runner services | **You choose this** - Pick a descriptive name. Common: `default`, `prod-runners`, `dev-runners`, `team-a-runners` |
 | `SHARED_GITHUB_ORG` | Your GitHub organization name | `my-company` or `acme-corp` | The GitHub organization where runners will register and appear. Must match your org's URL name | **Your GitHub org** - Found in your GitHub org URL: `https://github.com/YOUR_ORG_NAME`. If deploying for a repo, check with your GitHub admin |
@@ -609,11 +622,19 @@ Go to **Settings** → **Secrets and variables** → **Actions** → **Variables
 | Variable Name | What to Enter | Example Value | Why You Need This | Where You Got This |
 |--------------|---------------|---------------|-------------------|-------------------|
 | `SHARED_AWS_REGION` | Your AWS region code | `us-east-1`, `us-west-2`, `eu-west-1` | All AWS resources will be created in this region. Choose based on proximity to users or compliance requirements | **Step 1** - Found in AWS Console top-right, or ask your AWS administrator about your org's preferred region |
+| `TF_STATE_KEY` | Terraform state key path used by deployment workflow | `github-runner/terraform.tfstate` | Backend state key used by `deployment.yml`; keep distinct from `TF_NETWORKING_STATE_KEY` used by networking-only workflow | **You choose this** - Use a unique key path per account/environment |
+| `SHARED_CREATE_NETWORKING` | `true` to create networking, `false` to use existing VPC/subnets | `true` | Controls mode in `deployment.yml` | **You choose this** - Set `true` for out-of-box networking creation |
+| `SHARED_VPC_CIDR` | Primary VPC CIDR (`/16` to `/28`) | `10.40.0.0/16` | Required when `SHARED_CREATE_NETWORKING=true` | **Step 8 networking guidance below** |
+| `SHARED_VPC_ADDITIONAL_CIDRS` | Optional JSON array of additional VPC CIDRs | `["10.41.0.0/16"]` | Optional when `SHARED_CREATE_NETWORKING=true` for extra address space | **Step 8 networking guidance below** |
+| `SHARED_NETWORKING_AZS` | JSON array of AZ names | `["us-east-1a","us-east-1d"]` | Required when `SHARED_CREATE_NETWORKING=true`; used to create one subnet per AZ | **Step 8 networking guidance below** |
 | `SHARED_RUNNER_IMAGE` | Full ECR image URI | `123456789012.dkr.ecr.us-east-1.amazonaws.com/github-runner:latest` | The Docker image containing the GitHub Actions runner software. ECS pulls this to run your runners | **Step 6** - The full image path after building and pushing to ECR. Format: `ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/REPOSITORY:TAG` |
 | `SHARED_DESIRED_COUNT` | Number of runners (as a number) | `1`, `2`, or `5` | How many runner containers to run simultaneously. More = more parallel workflows but higher cost | **You choose this** - Start with `1` for testing. Increase to 2-5 if you need more parallel capacity. Can change later |
+| `SHARED_DEPLOYMENT_MIN_HEALTHY_PERCENT` | Optional minimum healthy percent | `100` | Optional ECS deployment control; defaults to `100` if unset | **Optional** |
+| `SHARED_DEPLOYMENT_MAXIMUM_PERCENT` | Optional maximum percent | `200` | Optional ECS deployment control; defaults to `200` if unset | **Optional** |
 | `SHARED_RUNNER_NAME_PREFIX` | Prefix for runner names | `ecs-github-runner`, `aws-runner-prod`, `team-a-runner` | Appears in GitHub's runner list to identify your runners. GitHub adds a unique suffix | **You choose this** - Pick something descriptive. Examples: `ecs-github-runner`, `prod-runner`, `team-a-runner`. Include environment/team info if you have multiple sets |
 | `SHARED_RUNNER_LABELS` | Comma-separated labels (no spaces after commas) | `self-hosted,team-a,ecs,ec2` or `self-hosted,linux,x64,production` | Used in `runs-on:` in workflows to target specific runners. Allows routing workflows to specific runner types | **You choose this** - Must include `self-hosted`. Add descriptive labels like team names, environment, or capabilities. Examples: `self-hosted,linux,x64,prod` or `self-hosted,team-a,docker,large` |
 | `SHARED_INSTANCE_AMI` | ECS-optimized AMI ID for your region | `ami-0123456789abcdef0` (varies by region) | The operating system image for EC2 instances. ECS-optimized AMI has Docker and ECS agent pre-installed | **See instructions below** - AMI ID is different for each region. Use the latest ECS-optimized AMI for your specific region |
+| `SHARED_CLUSTER_NAME` | Optional cluster/resource name | `nexus-repo` | Optional naming value used by workflow; defaults to `nexus-repo` if unset | **Optional** |
 
 **3. Optional: Create networking (VPC, subnets, Transit Gateway)**
 
@@ -629,6 +650,41 @@ If you want this repo to **create** the VPC, private subnets, **Transit Gateway*
 | `SHARED_VPC_CIDR` | **Variables** | Primary CIDR block for the created VPC. AWS VPC primary CIDRs must be between `/16` and `/28`. Use a private range that does not overlap with other networks you need to reach. | `10.40.0.0/16` | Required when creating networking so Terraform knows the primary VPC CIDR. |
 | `SHARED_VPC_ADDITIONAL_CIDRS` | **Variables** | Optional JSON array of additional VPC CIDRs to associate after VPC creation. Use this when you want more address space (for example a second `/16`). | `["10.41.0.0/16"]` | Optional. Set to `[]` or leave unset if you only want one CIDR block. |
 | `SHARED_NETWORKING_AZS` | **Variables** | JSON array of availability zone names (e.g. two AZs in your region) so subnets are created in each. Ensures runners span AZs for availability. | `["us-east-1a","us-east-1d"]` | Required when creating networking. Must be valid JSON; region AZ codes are generic and safe for public repos. |
+
+### Minimum required for `deployment.yml` (out-of-box run)
+
+Use this checklist when testing **Multi-Org github runner Deployment** (`.github/workflows/deployment.yml`).
+
+Required **Secrets**:
+
+- `SHARED_AWS_ACCOUNT_ID`
+- `SHARED_AWS_ROLE_NAME`
+- `TF_BACKEND_BUCKET`
+- `SHARED_RUNNER_SERVICE_NAME`
+- `SHARED_GITHUB_ORG`
+- `SHARED_RUNNER_TOKEN_SSM_PARAMETER_NAME`
+
+Required **Variables**:
+
+- `SHARED_AWS_REGION`
+- `TF_STATE_KEY`
+- `SHARED_RUNNER_IMAGE`
+- `SHARED_DESIRED_COUNT`
+- `SHARED_RUNNER_NAME_PREFIX`
+- `SHARED_RUNNER_LABELS`
+- `SHARED_INSTANCE_AMI` (required for EC2 launch type in this repo/workflow)
+
+If `SHARED_CREATE_NETWORKING=true`, also set:
+
+- `SHARED_CREATE_NETWORKING=true`
+- `SHARED_VPC_CIDR`
+- `SHARED_NETWORKING_AZS`
+- Optional: `SHARED_VPC_ADDITIONAL_CIDRS` (JSON array, default `[]`)
+
+When `SHARED_CREATE_NETWORKING=true`, you do **not** need:
+
+- `SHARED_VPC_ID`
+- `SHARED_SUBNETS`
 
 ### How to choose `SHARED_VPC_CIDR`
 
@@ -713,7 +769,13 @@ Choose a block that is:
 
 What is RFC1918?
 
-RFC1918 means private, non-internet-routable IP ranges reserved for internal networks. In AWS VPCs, you should use these private ranges for CIDRs.
+RFC1918 private IPv4 ranges:
+
+- `10.0.0.0/8` (10.0.0.0 - 10.255.255.255)
+- `172.16.0.0/12` (172.16.0.0 - 172.31.255.255)
+- `192.168.0.0/16` (192.168.0.0 - 192.168.255.255)
+
+In AWS VPCs, use CIDRs from one of these private ranges.
 
 Did we already run a TGW check?
 
@@ -823,7 +885,13 @@ Why those ranges (they are not random):
 
 #### What is RFC1918?
 
-RFC1918 means private, non-internet-routable IP ranges reserved for internal networks. In AWS VPCs, you should use these private ranges for CIDRs.
+RFC1918 private IPv4 ranges:
+
+- `10.0.0.0/8` (10.0.0.0 - 10.255.255.255)
+- `172.16.0.0/12` (172.16.0.0 - 172.31.255.255)
+- `192.168.0.0/16` (192.168.0.0 - 192.168.255.255)
+
+In AWS VPCs, use CIDRs from one of these private ranges.
 
 #### Did we already run a TGW check?
 
@@ -951,6 +1019,15 @@ If either workflow run turns red, start here:
 - Open the failed job and read the *first* error in the logs (later errors are often cascading failures).
 - For ECR errors, confirm the image/account/region you’re using matches the AWS account the workflow assumes.
 - For Terraform errors, search the log for `Error:` and the resource name; fix the upstream config and re-run **plan** first.
+
+**Account/region preflight (before deeper troubleshooting):**
+- In organizations that use AWS Access Portal, first confirm you opened the intended account, then confirm the AWS Console region selector matches `SHARED_AWS_REGION`.
+- In CloudShell, verify current account and region context:
+  ```bash
+  aws sts get-caller-identity --query Account --output text
+  aws configure get region
+  ```
+- If you see an error that includes **"explicit deny in a service control policy"**, this is an AWS Organizations SCP restriction (or wrong account/region context), not a Terraform code bug.
 
 ### Step 10: Check That It Works
 
