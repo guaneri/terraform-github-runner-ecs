@@ -453,13 +453,13 @@ If your organization uses the **AWS Access Portal**, that is how you choose/sign
 
 ### Step 2: Understand the Deployment Workflows
 
-Before gathering all the information you need, it's helpful to understand what the deployment workflows require. This way, you'll know **why** you're collecting each piece of information in the following steps.
+You will run **Build & Push Docker Image** before you run **Multi-Org github runner Deployment**. Before both workflows, run the Python IAM setup script (`scripts/setup-github-actions-iam.py`) once to create/update the GitHub OIDC role and related IAM setup (here is how to run it: [scripts/README.md](scripts/README.md)), then add those outputs as repository secrets/variables. Those values are explained in the next section. For now, here is what each workflow is, what it does, and why it is important.
 
 There are three workflows you can use during setup and deployment:
 
-1. **Build & Push Docker Image** (`.github/workflows/docker-build.yml`) – Builds and pushes the runner image to ECR. **Run this first** (or whenever you change Docker image content) so `deployment.yml` has a valid `SHARED_RUNNER_IMAGE`. See [.github/workflows/docker-build-README.md](.github/workflows/docker-build-README.md).
-2. **Multi-Org github runner Deployment** (`.github/workflows/deployment.yml`) – The main workflow. It runs Terraform plan/deploy/destroy for the full stack (ECS cluster, runners, EFS, and optionally networking). **Run this after image build** to plan/deploy the runner infrastructure.
-3. **Deploy networking only** (`.github/workflows/deploy-networking.yml`) – Optional. Runs Terraform only for the networking module (VPC, subnets, TGW) using a **separate state file**. **Run this when you want to test or manage networking in isolation**. See [.github/workflows/deploy-networking-README.md](.github/workflows/deploy-networking-README.md).
+1. **Build & Push Docker Image** (`.github/workflows/docker-build.yml`) – Builds the runner Docker image from `docker/dockerfile` and pushes it to ECR. **Why it matters:** `deployment.yml` needs a valid image URI (`SHARED_RUNNER_IMAGE`) to start runner tasks. **When to run:** first-time setup before the multi-org github runner deployment workflow run and any time you change Docker image content. See [.github/workflows/docker-build-README.md](.github/workflows/docker-build-README.md).
+2. **Multi-Org github runner Deployment** (`.github/workflows/deployment.yml`) – Main infrastructure workflow that runs Terraform plan/deploy/destroy for ECS runners, EFS, IAM, and optional networking. **Why it matters:** this is the workflow that actually creates and updates your runner platform. **When to run:** after required secrets/variables are configured and after build & push docker image workflow runs
+3. **Deploy networking only** (`.github/workflows/deploy-networking.yml`) – Optional Terraform workflow focused only on networking resources (VPC, subnets, TGW) using a separate state key. **Why it matters:** lets you test or manage networking independently from the full deployment. **When to run:** when validating networking in isolation or when you want networking changes separately controlled. See [.github/workflows/deploy-networking-README.md](.github/workflows/deploy-networking-README.md).
 
 **What the workflow needs:**
 
