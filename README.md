@@ -2,6 +2,34 @@
 
 This guide will help you deploy your own GitHub Actions runners on Amazon Web Services (AWS). Think of this as creating your own computers in the cloud that can run your GitHub Actions workflows instead of using GitHub's shared runners.
 
+## Table of Contents
+
+- [Quick Overview](#quick-overview)
+- [What You're Building](#what-youre-building)
+- [Features](#features)
+- [Repository layout](#repository-layout)
+- [Architecture](#architecture)
+  - [Network ingress/egress (connecting to runners)](#network-ingressegress-connecting-to-runners)
+  - [Autoscaling and scale configuration](#autoscaling-and-scale-configuration)
+  - [Third-party connectivity](#third-party-connectivity)
+  - [Permissions management](#permissions-management)
+- [What You Need Before Starting](#what-you-need-before-starting)
+- [Step-by-Step Setup Guide](#step-by-step-setup-guide)
+  - [Step 1: Get Your AWS Account Information](#step-1-get-your-aws-account-information)
+  - [Step 2: Understand the Deployment Workflows](#step-2-understand-the-deployment-workflows)
+  - [Step 3: Set Up Your VPC (Virtual Network)](#step-3-set-up-your-vpc-virtual-network)
+  - [Step 4: Get a GitHub Runner Token](#step-4-get-a-github-runner-token)
+  - [Step 5: Save the Token Securely in AWS](#step-5-save-the-token-securely-in-aws)
+  - [Step 6: Build and Upload the Runner Docker Image](#step-6-build-and-upload-the-runner-docker-image)
+  - [Step 7: Create Infrastructure Config File](#step-7-create-infrastructure-config-file)
+  - [Step 8: Set Up GitHub Secrets and Variables](#step-8-set-up-github-secrets-and-variables)
+  - [Step 9: Deploy Everything](#step-9-deploy-everything)
+  - [Step 10: Check That It Works](#step-10-check-that-it-works)
+- [Using Your Runners](#using-your-runners)
+- [What Each Setting Does](#what-each-setting-does)
+- [Common Problems and Solutions](#common-problems-and-solutions)
+- [Removing Everything](#removing-everything)
+
 ## Quick Overview
 
 **What is this?** A way to run your GitHub Actions workflows on your own computers in AWS instead of using GitHub's shared runners.
@@ -48,7 +76,7 @@ This repository is organized as follows:
 - **GitHub Actions workflows** (`.github/workflows/`)
   - **deployment.yml** – Main deployment: plan/deploy/destroy the full stack (runners, ECS, EFS, and optionally networking). When `SHARED_CREATE_NETWORKING` is true, it creates the VPC, subnets, and TGW in the same run.
   - **deploy-networking.yml** – Optional: plan/deploy only the networking module using a **separate state file**. See [Deploy networking only](.github/workflows/deploy-networking-README.md) for details.
-  - **docker-build.yml** – Build and push the runner Docker image to ECR.
+  - **docker-build.yml** – Build and push the runner Docker image to ECR. See [Docker build workflow](.github/workflows/docker-build-README.md).
 - **Other** – `docker/` (Dockerfile), `scripts/` (e.g. IAM setup), `tests/` (Terraform test fixtures).
 
 ## Architecture
@@ -308,32 +336,6 @@ The following diagram shows how IAM roles, trust policies, and security groups a
 | **Runtime** | EC2 instance role | ec2.amazonaws.com | ECS for EC2, SSM Managed Instance Core |
 | **Runtime** | ECS task role | ecs-tasks.amazonaws.com | CloudWatch Logs, ECR pull, SSM (token + ECS Exec), EFS + KMS, optional STS assume |
 
-## Table of Contents
-
-- [Features](#features)
-- [Repository layout](#repository-layout)
-- [Architecture](#architecture)
-  - [Network ingress/egress (connecting to runners)](#network-ingressegress-connecting-to-runners)
-  - [Autoscaling and scale configuration](#autoscaling-and-scale-configuration)
-  - [Third-party connectivity](#third-party-connectivity)
-  - [Permissions management](#permissions-management)
-- [What You Need Before Starting](#what-you-need-before-starting)
-- [Step-by-Step Setup Guide](#step-by-step-setup-guide)
-  - [Step 1: Get Your AWS Account Information](#step-1-get-your-aws-account-information)
-  - [Step 2: Understand the Deployment Workflows](#step-2-understand-the-deployment-workflows)
-  - [Step 3: Set Up Your VPC (Virtual Network)](#step-3-set-up-your-vpc-virtual-network)
-  - [Step 4: Get a GitHub Runner Token](#step-4-get-a-github-runner-token)
-  - [Step 5: Save the Token Securely in AWS](#step-5-save-the-token-securely-in-aws)
-  - [Step 6: Build and Upload the Runner Docker Image](#step-6-build-and-upload-the-runner-docker-image)
-  - [Step 7: Create Infrastructure Config File](#step-7-create-infrastructure-config-file)
-  - [Step 8: Set Up GitHub Secrets and Variables](#step-8-set-up-github-secrets-and-variables)
-  - [Step 9: Deploy Everything](#step-9-deploy-everything)
-  - [Step 10: Check That It Works](#step-10-check-that-it-works)
-- [Using Your Runners](#using-your-runners)
-- [What Each Setting Does](#what-each-setting-does)
-- [Common Problems and Solutions](#common-problems-and-solutions)
-- [Removing Everything](#removing-everything)
-
 ## What You Need Before Starting
 
 Before you begin, make sure you have:
@@ -389,16 +391,75 @@ If your organization uses the **AWS Access Portal**, that is how you choose/sign
    - This is usually shown in the top-right of the AWS Console
    - Common regions: `us-east-1` (N. Virginia), `us-west-2` (Oregon), `eu-west-1` (Ireland)
 
+   On which region to use: users should pick the region where they are allowed to deploy and where their dependencies live.
+
+   Practical guidance:
+   - Start with the region your client/platform team specifies (best source of truth).
+   - Use the same region consistently for:
+     - IAM role assumption scope
+     - Terraform backend bucket access
+     - ECR image location
+     - VPC/networking resources
+   - Set that as `SHARED_AWS_REGION` (and check Console selector + CloudShell context matches).
+
+   Quick checks:
+   - Console region selector (top-right) should match `SHARED_AWS_REGION`.
+   - CloudShell:
+     ```bash
+     aws sts get-caller-identity --query Account --output text
+     aws configure get region
+     ```
+   - If they pick the wrong region, they’ll often see “not authorized”/resource-not-found style errors even when permissions look correct.
+
+   **If there is no client-provided region, use this quick guide:**
+   1. Use your team/client standard region first (if one exists).
+   2. If no standard is provided, choose one region and keep all resources in that same region.
+   3. Prefer a region where your account has permissions and required services available.
+      - Using the wrong region can produce misleading permission/resource errors even when your setup is otherwise correct.
+   Run this first: confirm account and region context in CLI:
+   ```bash
+   aws sts get-caller-identity --query Account --output text
+   aws configure get region
+   ```
+   4. Confirm service availability in that region:
+      - Check AWS Regional Services list: https://aws.amazon.com/about-aws/global-infrastructure/regional-product-services/
+      - Verify the core services used here (ECS, EC2/VPC, ECR, EFS, SSM, IAM, CloudWatch Logs, S3 backend access) are available in your chosen region.
+   5. Confirm permissions in that region before deployment (easy mode in CloudShell):
+      - Set your region once:
+        ```bash
+        REGION=us-east-1
+        ```
+      - Run these checks:
+        ```bash
+        aws sts get-caller-identity --output table
+        aws ec2 describe-vpcs --region $REGION --max-items 5
+        aws ecs list-clusters --region $REGION --max-items 5
+        aws ecr describe-repositories --region $REGION --max-items 5
+        aws efs describe-file-systems --region $REGION --max-items 5
+        aws ssm describe-parameters --region $REGION --max-results 5
+        aws s3api list-buckets --max-items 20
+        aws ec2 create-vpc --region $REGION --cidr-block 10.255.0.0/16 --dry-run
+        ```
+      - What success looks like:
+        - Read/list commands return data (or empty lists).
+        - Dry run returns `DryRunOperation`.
+      - If a check fails:
+        - `AccessDenied` or `UnauthorizedOperation`: ask your AWS admin/platform team to grant permissions in this account/region.
+        - `explicit deny in a service control policy`: this is an org-level block (SCP). Only org/security admins can change it.
+        - Endpoint/region errors: verify your region and retry with the correct value.
+      - Optional deeper check: IAM Policy Simulator (https://policysim.aws.amazon.com/) can test specific actions on a role/user.
+
 **Write these down** - you'll need them in later steps!
 
 ### Step 2: Understand the Deployment Workflows
 
 Before gathering all the information you need, it's helpful to understand what the deployment workflows require. This way, you'll know **why** you're collecting each piece of information in the following steps.
 
-There are two deployment-related workflows:
+There are three workflows you can use during setup and deployment:
 
-1. **Multi-Org github runner Deployment** (`.github/workflows/deployment.yml`) – The main workflow. It runs Terraform plan/deploy/destroy for the full stack (ECS cluster, runners, EFS, and optionally networking). When **create networking** is enabled (`SHARED_CREATE_NETWORKING` = `true`), this workflow creates the VPC, subnets, and Transit Gateway in the same run; you do not need a separate step. It uses GitHub repository **secrets** and **variables** to configure Terraform automatically.
-2. **Deploy networking only** (`.github/workflows/deploy-networking.yml`) – Optional. Runs Terraform only for the networking module (VPC, subnets, TGW) using a **separate state file**. Use this if you want to test or manage networking in isolation. See [.github/workflows/deploy-networking-README.md](.github/workflows/deploy-networking-README.md) for configuration and usage.
+1. **Build & Push Docker Image** (`.github/workflows/docker-build.yml`) – Builds and pushes the runner image to ECR. **Run this first** (or whenever you change Docker image content) so `deployment.yml` has a valid `SHARED_RUNNER_IMAGE`. See [.github/workflows/docker-build-README.md](.github/workflows/docker-build-README.md).
+2. **Multi-Org github runner Deployment** (`.github/workflows/deployment.yml`) – The main workflow. It runs Terraform plan/deploy/destroy for the full stack (ECS cluster, runners, EFS, and optionally networking). **Run this after image build** to plan/deploy the runner infrastructure.
+3. **Deploy networking only** (`.github/workflows/deploy-networking.yml`) – Optional. Runs Terraform only for the networking module (VPC, subnets, TGW) using a **separate state file**. **Run this when you want to test or manage networking in isolation**. See [.github/workflows/deploy-networking-README.md](.github/workflows/deploy-networking-README.md).
 
 **What the workflow needs:**
 
