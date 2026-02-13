@@ -42,8 +42,8 @@ The script only creates IAM roles and the OIDC provider. It does **not** create 
    - Do not use uppercase letters or underscores.
    - Bucket names are globally unique across AWS, so you may need to pick a different name if one already exists.
 
-   **Create the bucket:**
-   - **Console:** S3 → **Create bucket** → choose a bucket name (this will be your `TF_BACKEND_BUCKET` value), select the correct region → **Create bucket**.
+   **Create the bucket (enable versioning at creation time if possible):**
+   - **Console:** S3 → **Create bucket** → choose a bucket name (this will be your `TF_BACKEND_BUCKET` value), select the correct region, and enable **Bucket Versioning** during setup if your console flow shows that option → **Create bucket**.
    - **CLI:** To run the commands below you need a terminal with the AWS CLI: **In AWS CloudShell** — click the **CloudShell** icon in the AWS Console top bar; the CLI is pre-installed and uses the account you're logged into. **On your own machine** — open a terminal (e.g. **Terminal** on macOS/Linux, **PowerShell** or **Command Prompt** on Windows), install the [AWS CLI](https://aws.amazon.com/cli/) if needed, and run `aws configure`. Then run (replace `BUCKET_NAME` and `REGION` with your values; for regions other than `us-east-1` you must set `--create-bucket-configuration LocationConstraint=REGION`):
      ```bash
      aws s3api create-bucket --bucket BUCKET_NAME --region REGION
@@ -51,7 +51,7 @@ The script only creates IAM roles and the OIDC provider. It does **not** create 
      # aws s3api create-bucket --bucket BUCKET_NAME --region REGION --create-bucket-configuration LocationConstraint=REGION
      ```
 
-   **Enable versioning:**
+   **If you forgot to enable versioning during creation (or could not enable it there), enable it now:**
    - **Console:** Open the bucket → **Properties** → **Bucket Versioning** → **Edit** → **Enable** → **Save changes**.
    - **CLI:** Run (replace `BUCKET_NAME` with your bucket name):
      ```bash
@@ -148,9 +148,9 @@ Important:
 
    You can paste the whole block into the CloudShell terminal; it will run as separate commands (one per line). **Replace each placeholder with your real values before pasting**—otherwise the script will see the placeholders. Edit the block in a text editor on your machine (e.g. Notepad or your IDE), then paste the edited block into the terminal.
 
-4. Install boto3 (if needed) and run the script:
-   - If you used **Option A** (cloned repo): `pip install boto3` then `python3 scripts/setup-github-actions-iam.py`
-   - If you used **Option B** (created file manually): `pip install boto3` then `python3 setup-github-actions-iam.py`
+4. Install boto3 (**only if not already installed**) and run the script:
+   - If you used **Option A** (cloned repo): `pip install boto3` (only if needed), then `python3 scripts/setup-github-actions-iam.py`
+   - If you used **Option B** (created file manually): `pip install boto3` (only if needed), then `python3 setup-github-actions-iam.py`
 
    The script prints what it creates and, at the end, the values to use in GitHub. CloudShell may show a boto3 warning about Python 3.9; you can ignore it (Python 3.10+ is recommended where available).
 
