@@ -578,9 +578,6 @@ This repository includes a workflow at `.github/workflows/docker-build.yml` name
 5. For **Docker image tag**, type `latest`
 6. Click the green **Run workflow** button
 
-**(Optional) Screenshot placeholder:** Add a screenshot of the **Run workflow** dialog for this workflow here:
-`docs/screenshots/docker-build-run-workflow.png`
-
 If it runs successfully, the workflow will turn green and your ECR repository will have a new image tag.
 If it turns red, see **Troubleshooting workflow failures** below.
 
