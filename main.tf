@@ -66,7 +66,7 @@ locals {
 resource "terraform_data" "validate_inputs" {
   input = {
     launch_type      = var.launch_type
-    image_id = local.instance_ami_effective
+    image_id = var.instance_ami
     runner_services  = var.runner_services
     github_org       = var.github_org
     runner_token_ssm = var.runner_token_ssm_parameter_name
