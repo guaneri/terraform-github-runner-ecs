@@ -496,7 +496,7 @@ The workflow requires you to set up GitHub repository secrets and variables. Her
 | `SHARED_DEPLOYMENT_MAXIMUM_PERCENT` | `200` | Optional ECS deployment setting used in `runner_services`. Defaults to `200` if unset. | Optional tuning value. |
 | `SHARED_RUNNER_NAME_PREFIX` | `ecs-github-runner`, `aws-runner-prod`, `team-a-runner` | This prefix appears in the GitHub runner list to help identify your runners. GitHub will append a unique identifier, so you'll see names like `ecs-github-runner-abc123`. | Pick something descriptive that helps you identify these runners in GitHub's UI. Include environment or team info if you have multiple sets of runners (e.g., `prod-runner`, `dev-runner`). |
 | `SHARED_RUNNER_LABELS` | `self-hosted,team-a,ecs,ec2`, `self-hosted,linux,x64,production` | Labels allow you to target specific runners in your GitHub Actions workflows using `runs-on: [label1, label2]`. You can use labels to route workflows to specific runner types, teams, or environments. | Include `self-hosted` (required by GitHub), plus descriptive labels like team names, environment (prod/dev), or capabilities (docker, large, etc.). Common labels: `self-hosted`, `linux`, `x64`, plus your custom labels. Think about how you want to organize workflow routing. |
-| `SHARED_INSTANCE_AMI` | `ami-0123456789abcdef0` (this will be different for each region) | This is the Amazon Machine Image (operating system) that will run on your EC2 instances. The ECS-optimized AMI is pre-configured with Docker and the ECS agent needed to run containers. | See Step 8 for instructions on finding the correct AMI. The AMI ID is different for each region, so make sure you get the one for your specific region. If you're unsure, ask your AWS administrator or use the AWS documentation link provided in Step 8. |
+| `SHARED_INSTANCE_AMI` | `ami-0123456789abcdef0` (this will be different for each region) | This is the Amazon Machine Image (operating system) that will run on your EC2 instances. The ECS-optimized AMI is pre-configured with Docker and the ECS agent needed to run containers. | Optional: set only if you want to pin a specific AMI ID. Otherwise the module will auto-select latest ECS-optimized AMI. See Step 8 for instructions on finding the correct AMI if you are choosing it yourself. The AMI ID is different for each region, so make sure you get the one for your specific region. If you're unsure, ask your AWS administrator or use the AWS documentation link provided in Step 8. |
 | `SHARED_CLUSTER_NAME` | `nexus-repo` | Optional cluster/resource naming value used by the workflows. Defaults to `nexus-repo` if unset. | Optional; set only if you want a custom name. |
 
 **What this means:** In the next steps, you'll gather all these values. Then in Step 8, you'll add them to your GitHub repository settings. The workflow will automatically use them when you deploy.
@@ -690,7 +690,7 @@ Go to **Settings** → **Secrets and variables** → **Actions** → **Variables
 | `SHARED_DEPLOYMENT_MAXIMUM_PERCENT` | Optional maximum percent | `200` | Optional ECS deployment control; defaults to `200` if unset | **Optional** |
 | `SHARED_RUNNER_NAME_PREFIX` | Prefix for runner names | `ecs-github-runner`, `aws-runner-prod`, `team-a-runner` | Appears in GitHub's runner list to identify your runners. GitHub adds a unique suffix | **You choose this** - Pick something descriptive. Examples: `ecs-github-runner`, `prod-runner`, `team-a-runner`. Include environment/team info if you have multiple sets |
 | `SHARED_RUNNER_LABELS` | Comma-separated labels (no spaces after commas) | `self-hosted,team-a,ecs,ec2` or `self-hosted,linux,x64,production` | Used in `runs-on:` in workflows to target specific runners. Allows routing workflows to specific runner types | **You choose this** - Must include `self-hosted`. Add descriptive labels like team names, environment, or capabilities. Examples: `self-hosted,linux,x64,prod` or `self-hosted,team-a,docker,large` |
-| `SHARED_INSTANCE_AMI` | ECS-optimized AMI ID for your region | `ami-0123456789abcdef0` (varies by region) | The operating system image for EC2 instances. ECS-optimized AMI has Docker and ECS agent pre-installed | **See instructions below** - AMI ID is different for each region. Use the latest ECS-optimized AMI for your specific region |
+| `SHARED_INSTANCE_AMI` | ECS-optimized AMI ID for your region | `ami-0123456789abcdef0` (varies by region) | The operating system image for EC2 instances. ECS-optimized AMI has Docker and ECS agent pre-installed | **See instructions below** - AMI ID is different for each region. Use the latest ECS-optimized AMI for your specific region. You can choose your own AMI using step 8's instructions or leave this blank for auto-discovery |
 | `SHARED_CLUSTER_NAME` | Optional cluster/resource name | `nexus-repo` | Optional naming value used by workflow; defaults to `nexus-repo` if unset | **Optional** |
 
 **3. Optional: Create networking (VPC, subnets, Transit Gateway)**
@@ -729,7 +729,7 @@ Required **Variables**:
 - `SHARED_DESIRED_COUNT`
 - `SHARED_RUNNER_NAME_PREFIX`
 - `SHARED_RUNNER_LABELS`
-- `SHARED_INSTANCE_AMI` (required for EC2 launch type in this repo/workflow)
+- `SHARED_INSTANCE_AMI` (will be used for EC2 launch type in this repo/workflow. If you don't set it, this code with auto-discover it)
 
 If `SHARED_CREATE_NETWORKING=true`, also set:
 
@@ -1349,7 +1349,7 @@ aws ecs update-service \
   --region YOUR_REGION
 ```
 
-### Problem: Can't Find the Right AMI
+### Problem: Can't Find the Right AMI if you chose to choose your own
 
 **What you see:** Terraform fails with "AMI not found" or similar error.
 

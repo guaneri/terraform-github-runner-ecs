@@ -19,7 +19,7 @@ resource "aws_launch_template" "github_runner_lt" {
   count = local.is_ec2_launch_type ? 1 : 0 # Only create for EC2 launch type (hosts exist only for EC2)
 
   name_prefix = "${local.effective_prefix}-lt-" # Launch template name prefix; derived from `local.effective_prefix` (see `locals.tf`)
-  image_id    = var.instance_ami                # AMI used to boot instances; from `var.instance_ami` (ECS-optimized recommended)
+  image_id = local.instance_ami_effective       # AMI used to boot instances; `instance_ami` override if set, else latest ECS-optimized AMI via SSM
   instance_type = var.instance_type             # EC2 instance size; from `var.instance_type`
   key_name      = null                          # No SSH key pair by default (access is typically via SSM)
 

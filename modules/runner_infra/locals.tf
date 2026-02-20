@@ -7,8 +7,10 @@
 # conditional logic across multiple files.
 #
 # Where these locals are used:
-# - `asg.tf`: uses `local.is_ec2_launch_type` to toggle EC2 resources and uses
-#   `local.effective_prefix` for launch template / ASG naming.
+# - `asg.tf`: uses `local.is_ec2_launch_type` to toggle EC2 resources,
+#   uses `local.effective_prefix` for launch template / ASG naming,
+#   and uses `local.instance_ami_effective` to select the EC2 AMI
+#   (pinned via `var.instance_ami` if set, otherwise auto-discovered via SSM).
 # - `security-group.tf`: uses `local.effective_prefix` for the instance security
 #   group name/description.
 # - Other resources/outputs in this module use `local.effective_prefix` to keep
@@ -27,6 +29,11 @@ locals {
   # Stable naming prefix used across infra resources (derived from `var.infra_name_prefix` and `var.cluster_name`).
   # Used to name/tag the shared infra resources that *create/manage* the EC2 instances (launch template, ASG, instance security group, capacity provider, etc.).
   effective_prefix = trimspace(var.infra_name_prefix) != "" ? var.infra_name_prefix : "${var.cluster_name}-gh-runner" # Base prefix: explicit `var.infra_name_prefix` if set, else derived from `var.cluster_name`
+
+  # Effective AMI selection:
+  # - If user provides `instance_ami` → use it (AMI pinning)
+  # - Otherwise → auto-discover the latest ECS-optimized AL2 AMI via SSM
+  instance_ami_effective = (
+    var.instance_ami != null && trim(var.instance_ami) != ""
+  ) ? var.instance_ami : data.aws_ssm_parameter.ecs_al2_ami.value
 }
-
-

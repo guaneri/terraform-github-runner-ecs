@@ -87,9 +87,9 @@ variable "assign_public_ip" {
 # AMI ID used to boot the EC2 instances (only used when `launch_type = "EC2"`).
 # An AMI is an “OS image” for EC2; you typically want the ECS-optimized AMI so Docker + ECS agent are preinstalled.
 variable "instance_ami" {
-  description = "AMI ID for the EC2 instances (ECS-optimized recommended). Required when launch_type=EC2."
+  description = "Optional: AMI ID for EC2 instances. If null or empty, the latest ECS-optimized AMI will be auto-discovered. AMI ID for the EC2 instances (ECS-optimized recommended). Required when launch_type=EC2."
   type        = string
-  default     = ""
+  default     = null
 }
 
 # EC2 instance type (size) for the container instances (only used when `launch_type = "EC2"`).

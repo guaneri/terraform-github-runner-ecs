@@ -137,6 +137,7 @@ jobs:
             "runner_labels": "${{ vars.SHARED_RUNNER_LABELS }}"
           }
         }
+      # Optional: set only if you want to pin a specific AMI ID. Otherwise the module will auto-select latest ECS-optimized AMI.
       TF_VAR_instance_ami: ${{ vars.SHARED_INSTANCE_AMI }}
 
     steps:

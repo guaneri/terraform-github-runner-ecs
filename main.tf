@@ -66,19 +66,13 @@ locals {
 resource "terraform_data" "validate_inputs" {
   input = {
     launch_type      = var.launch_type
-    instance_ami     = var.instance_ami
+    image_id = local.instance_ami_effective
     runner_services  = var.runner_services
     github_org       = var.github_org
     runner_token_ssm = var.runner_token_ssm_parameter_name
   }
 
   lifecycle {
-    # Validates that instance_ami is provided when using EC2 launch type (EC2 needs an AMI to boot from)
-    precondition {
-      condition     = var.launch_type != "EC2" || trimspace(var.instance_ami) != ""
-      error_message = "When launch_type is EC2, instance_ami must be set."
-    }
-
     # Validates that github_org is set when using single-org mode (runner_services is empty)
     precondition {
       condition     = length(var.runner_services) > 0 || trimspace(var.github_org) != ""
