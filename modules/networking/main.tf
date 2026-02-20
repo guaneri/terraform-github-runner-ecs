@@ -34,6 +34,20 @@ resource "aws_vpc" "main" {
   }
 }
 
+# Lock down default security group (required by CKV2_AWS_12)
+# Removes permissive default rules so nothing can accidentally use it.
+resource "aws_default_security_group" "default" {
+  vpc_id = aws_vpc.main.id
+
+  ingress = [] # no inbound allowed by default SG
+  egress  = [] # no outbound allowed by default SG
+
+  tags = {
+    Name = "${var.name_prefix}-default-sg"
+  }
+}
+
+
 # Optional additional VPC CIDRs (for example a second /16 block).
 resource "aws_vpc_ipv4_cidr_block_association" "additional" {
   count = length(var.vpc_additional_cidrs)
