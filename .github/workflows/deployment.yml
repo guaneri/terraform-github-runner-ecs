@@ -160,18 +160,27 @@ jobs:
           aws sts get-caller-identity
           aws iam get-role --role-name ${{ secrets.SHARED_AWS_ROLE_NAME }}
 
-
       # 2.5. Write shared runner token to SSM (automated)
       - name: Write shared runner token to SSM
         env:
           AWS_REGION: ${{ vars.SHARED_AWS_REGION }}
-          SSM_PARAM_NAME: ${{ secrets.SHARED_RUNNER_TOKEN_SSM_PARAMETER_NAME }}
+          RAW_SSM_PARAM_NAME: ${{ secrets.SHARED_RUNNER_TOKEN_SSM_PARAMETER_NAME }}
           SHARED_RUNNER_TOKEN: ${{ secrets.SHARED_RUNNER_TOKEN }}
         run: |
-          if [ -z "$SSM_PARAM_NAME" ] || [ -z "$SHARED_RUNNER_TOKEN" ]; then
+          if [ -z "$RAW_SSM_PARAM_NAME" ] || [ -z "$SHARED_RUNNER_TOKEN" ]; then
             echo "SSM parameter name or SHARED_RUNNER_TOKEN secret is missing; skipping SSM write."
             exit 1
           fi
+
+          # Ensure parameter name starts with '/'
+          if [[ "$RAW_SSM_PARAM_NAME" != /* ]]; then
+            SSM_PARAM_NAME="/$RAW_SSM_PARAM_NAME"
+          else
+            SSM_PARAM_NAME="$RAW_SSM_PARAM_NAME"
+          fi
+
+          echo "Writing runner token to SSM parameter: $SSM_PARAM_NAME"
+
           aws ssm put-parameter \
             --name "$SSM_PARAM_NAME" \
             --value "$SHARED_RUNNER_TOKEN" \
