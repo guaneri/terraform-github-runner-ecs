@@ -181,18 +181,9 @@ module "runner_service" {
 
   vpc_id             = local.effective_vpc_id                                              # VPC: from networking module when create_networking, else var.vpc_id
   subnets            = local.effective_subnets                                             # Subnets: from networking module when create_networking, else var.subnets
-  # Security groups attached to the ECS service ENIs.
-  # Precedence:
-  # 1. Service-specific security_group_ids (each.value.security_group_ids)
-  # 2. Top-level var.security_group_ids (for BYO networking mode)
-  # 3. Module-created default runner_tasks SG (used when create_networking = true)
-  #
-  # This guarantees at least one non-null SG list when networking is created
-  # and avoids coalescelist() failing due to null/empty inputs.
-  security_group_ids = coalescelist(
+  security_group_ids = coalesce(
     try(each.value.security_group_ids, null),
-    var.security_group_ids,
-    var.create_networking ? [aws_security_group.runner_tasks.id] : null
+    var.security_group_ids
   )
   assign_public_ip   = false                                                               # Whether to assign public IP addresses to tasks (usually false)
 

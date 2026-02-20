@@ -161,7 +161,14 @@ resource "aws_ecs_service" "github_runner_service" {
   # Definition: for `awsvpc` tasks, ECS creates a task ENI in these subnets and attaches these security groups.
   network_configuration {
     subnets         = var.subnets                                                          # Subnets where task ENIs are created (awsvpc); from `var.subnets`
-    security_groups = concat([aws_security_group.runner_tasks.id], var.security_group_ids) # Task security groups: module SG + any extra SGs from `var.security_group_ids`
+
+    # Always attach the module's runner_tasks SG (required for EFS access + baseline egress),
+    # and optionally add any extra SGs provided via `var.security_group_ids`.
+    security_groups = concat(
+      [aws_security_group.runner_tasks.id],
+      var.security_group_ids
+    )
+
     # assign_public_ip is only meaningful for Fargate tasks.
     assign_public_ip = local.is_ec2_launch_type ? false : var.assign_public_ip # For EC2 tasks keep false; for Fargate, follow `var.assign_public_ip`
   }
