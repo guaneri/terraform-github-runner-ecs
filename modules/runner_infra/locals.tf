@@ -34,6 +34,7 @@ locals {
   # - If user provides `instance_ami` → use it (AMI pinning)
   # - Otherwise → auto-discover the latest ECS-optimized AL2 AMI via SSM
   instance_ami_effective = (
-    var.instance_ami != null && trim(var.instance_ami) != ""
+    var.instance_ami != null &&
+    trimspace(var.instance_ami) != ""
   ) ? var.instance_ami : data.aws_ssm_parameter.ecs_al2_ami.value
 }
