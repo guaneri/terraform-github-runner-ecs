@@ -531,7 +531,9 @@ This token lets your runner connect to GitHub. Here's how to get it:
 3. Click **Actions** (in the left sidebar)
 4. Click **Runners** (in the left sidebar)
 5. Click **New self-hosted runner** (green button)
-6. Copy the token that appears (it's a long string of letters and numbers)
+6. Select **Linux** for the operating system (runners run in AWS ECS, which uses Linux containers)
+7. Select **x64** for the architecture (matches EC2 t3 instances and ECS-optimized AMIs)
+8. Copy the token shown after `--token` in the **Configure** section (in the command `./config.sh --url ... --token YOUR_TOKEN_HERE`; copy the `YOUR_TOKEN_HERE` value)
 
 > ⚠️ **IMPORTANT**: This token expires in 1 hour! If you take longer than an hour to finish setup, you'll need to get a new token.
 
@@ -543,21 +545,17 @@ This token lets your runner connect to GitHub. Here's how to get it:
 
 We'll store your GitHub token in AWS Systems Manager Parameter Store (think of it as a secure password vault).
 
-Run this command (replace the parts in `<brackets>`):
+Add the Token to GitHub (Automated AWS Write)
+Instead of manually writing the token to AWS, we now store it as a GitHub secret and let the deployment workflow write it to AWS Systems Manager Parameter Store automatically.
+Go to your GitHub repository
+Click Settings
+Click Secrets and variables → Actions
+Click New repository secret
+Name the secret:
+SHARED_RUNNER_TOKEN
+Paste the token you copied in Step 4
+Click Save
 
-```bash
-aws ssm put-parameter \
-  --name "github-runner/token" \
-  --value "YOUR_TOKEN_FROM_STEP_3" \
-  --type "SecureString" \
-  --region YOUR_AWS_REGION \
-  --overwrite
-```
-
-**What to replace:**
-- `YOUR_TOKEN_FROM_STEP_3` - The token you copied in Step 3
-- `YOUR_AWS_REGION` - The region you wrote down in Step 1 (e.g., `us-east-1`)
-- `"github-runner/token"` - You can change this name if you want, but remember what you called it!
 
 **What this does:** Saves your token securely in AWS so the runners can use it later.
 
@@ -670,7 +668,7 @@ Go to your GitHub repository → **Settings** → **Secrets and variables** → 
 | `SHARED_SECURITY_GROUP_IDS` | Comma-separated security group IDs (no spaces) | `sg-0123456789abcdef0` | Controls network traffic rules (firewall) for the runners. Must allow outbound HTTPS to GitHub and AWS APIs | **Step 3** - Found in AWS Console (VPC → Security Groups). If you need to create new ones, ask your security team about required rules |
 | `SHARED_RUNNER_SERVICE_NAME` | A name for your runner service | `default` or `production-runners` | Identifies this ECS service. Used for organization if you have multiple runner services | **You choose this** - Pick a descriptive name. Common: `default`, `prod-runners`, `dev-runners`, `team-a-runners` |
 | `SHARED_GITHUB_ORG` | Your GitHub organization name | `my-company` or `acme-corp` | The GitHub organization where runners will register and appear. Must match your org's URL name | **Your GitHub org** - Found in your GitHub org URL: `https://github.com/YOUR_ORG_NAME`. If deploying for a repo, check with your GitHub admin |
-| `SHARED_RUNNER_TOKEN_SSM_PARAMETER_NAME` | The SSM parameter path/name | `github-runner/token` or `/github/runners/token` | The path in AWS Parameter Store where the GitHub runner token is stored. Runners retrieve this to authenticate | **Step 5** - The parameter name you used when storing the token (e.g., `github-runner/token`) |
+| `SHARED_RUNNER_TOKEN_SSM_PARAMETER_NAME` | The SSM parameter path/name | `github-runner/token` or `/github-org/runner/token` | The path in AWS Parameter Store where the GitHub runner token is stored. Runners retrieve this to authenticate | **Step 5** - The parameter name you used when storing the token (e.g., `github-runner/token`) |
 | `SHARED_AWS_ROLE_NAME` | IAM role name for GitHub Actions | `GitHubActionsTerraformRole` or `github-actions-deploy-role` | Allows GitHub Actions workflow to authenticate with AWS via OIDC (no long-lived credentials needed) | **Ask your AWS admin** - This role must exist and have permissions to create ECS, EC2, VPC, IAM resources. If it doesn't exist, ask your DevOps/Infrastructure team to create it |
 | `TF_BACKEND_BUCKET` | S3 bucket name for Terraform state | `my-company-terraform-state` or `github-runner-terraform-state` | Stores Terraform's state file so the workflow knows what resources already exist. Must have versioning enabled | **Ask your DevOps team** - Check if your organization has a standard Terraform state bucket. If not, create one or ask your AWS administrator. Should be in the same region as your deployment |
 
