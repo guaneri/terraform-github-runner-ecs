@@ -47,10 +47,26 @@ resource "aws_default_security_group" "default" {
   }
 }
 
+# KMS key for encrypting VPC Flow Logs in CloudWatch (required by CKV_AWS_158)
+resource "aws_kms_key" "vpc_flow_logs" {
+  description             = "KMS key for CloudWatch log group encryption: VPC flow logs (${var.name_prefix})"
+  deletion_window_in_days = 30
+  enable_key_rotation     = true
+
+  tags = {
+    Name = "${var.name_prefix}-vpc-flow-logs-kms"
+  }
+}
+
+resource "aws_kms_alias" "vpc_flow_logs" {
+  name          = "alias/${var.name_prefix}-vpc-flow-logs"
+  target_key_id = aws_kms_key.vpc_flow_logs.key_id
+}
+
 # CloudWatch Log Group for VPC Flow Logs
 resource "aws_cloudwatch_log_group" "vpc_flow_logs" {
   name              = "/aws/vpc-flow-logs/${var.name_prefix}"
-  retention_in_days = 30
+  retention_in_days = 365
 
   tags = {
     Name = "${var.name_prefix}-vpc-flow-logs"
