@@ -119,10 +119,10 @@ jobs:
       TF_VAR_networking_azs: ${{ vars.SHARED_NETWORKING_AZS }}
       # When create_networking is false, set SHARED_VPC_ID and SHARED_SUBNETS; when true, leave them unset/empty
       TF_VAR_vpc_id: ${{ secrets.SHARED_VPC_ID }}
-      TF_VAR_subnets: ${{ secrets.SHARED_SUBNETS }}
+      TF_VAR_subnets: ${{ secrets.SHARED_SUBNETS != '' && secrets.SHARED_SUBNETS || '[]' }}
       # Top-level security_group_ids: used for infrastructure (runner_infra module) 
       # and as fallback for runner_service modules when they don't specify their own
-      TF_VAR_security_group_ids: ${{ secrets.SHARED_SECURITY_GROUP_IDS }}
+      TF_VAR_security_group_ids: ${{ secrets.SHARED_SECURITY_GROUP_IDS != '' && secrets.SHARED_SECURITY_GROUP_IDS || '[]' }}
       # Map of runner services to create (JSON string). Built from repo-level secrets/vars.
       TF_VAR_runner_services: |-
         {
