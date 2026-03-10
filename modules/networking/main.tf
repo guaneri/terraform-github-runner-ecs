@@ -193,7 +193,7 @@ resource "aws_subnet" "public" {
     length(var.networking_azs) + count.index,
   )
   depends_on = [aws_vpc_ipv4_cidr_block_association.additional]
-  map_public_ip_on_launch = true
+  map_public_ip_on_launch = false
   tags = {
     Name = "${var.name_prefix}-public-${var.networking_azs[count.index]}"
   }
