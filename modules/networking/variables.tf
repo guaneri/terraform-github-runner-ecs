@@ -2,7 +2,7 @@
 # Networking Module - Input Variables
 ################################################################################
 #
-# Used when this repo creates VPC, subnets, Transit Gateway, and egress routes.
+# Used when this repo creates VPC, subnets, NAT Gateway, IGW, and egress routes.
 # All values come from Terraform variables (no hardcoded IDs or CIDRs).
 #
 ################################################################################
@@ -24,7 +24,7 @@ variable "networking_azs" {
 }
 
 variable "name_prefix" {
-  description = "Optional prefix for resource names (VPC, subnets, TGW, route table). Helps avoid collisions if multiple stacks exist."
+  description = "Optional prefix for resource names (VPC, subnets, NAT gateway, route tables). Helps avoid collisions if multiple stacks exist."
   type        = string
   default     = "github-runner"
 }

@@ -1,12 +1,15 @@
 ################################################################################
-# Networking Module - Transit Gateway, VPC, Subnets, Attachment, Routes
+# Networking Module - VPC, Public/Private Subnets, NAT Gateway, IGW, Routes
 ################################################################################
 #
 # Creates:
-# - Transit Gateway (TGW)
-# - VPC with private subnets (one per AZ)
-# - TGW VPC attachment
-# - Route table for subnets with 0.0.0.0/0 -> TGW (egress)
+# - VPC with private subnets (one per AZ, for ECS) and public subnets (one per AZ, for NAT)
+# - Internet Gateway (IGW) attached to VPC
+# - NAT gateway per AZ in public subnet (egress for private subnets)
+# - Public route table: 0.0.0.0/0 -> IGW
+# - Private route table per AZ: 0.0.0.0/0 -> NAT gateway (that AZ)
+#
+# Egress path: ECS -> private subnet route table -> NAT gateway -> IGW -> internet
 #
 ################################################################################
 
@@ -17,16 +20,6 @@ locals {
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
-# Transit Gateway: regional gateway for routing; this repo creates it.
-resource "aws_ec2_transit_gateway" "main" {
-  description                     = "Transit Gateway for GitHub runner VPC egress (created by terraform-github-runner-ecs)"
-  default_route_table_association = "enable"
-  default_route_table_propagation = "enable"
-  tags = {
-    Name = "${var.name_prefix}-tgw"
-  }
-}
-
 # VPC
 resource "aws_vpc" "main" {
   cidr_block           = var.vpc_cidr
@@ -34,6 +27,14 @@ resource "aws_vpc" "main" {
   enable_dns_support   = true
   tags = {
     Name = "${var.name_prefix}-vpc"
+  }
+}
+
+# Internet Gateway for NAT gateway egress to the internet
+resource "aws_internet_gateway" "main" {
+  vpc_id = aws_vpc.main.id
+  tags = {
+    Name = "${var.name_prefix}-igw"
   }
 }
 
@@ -181,36 +182,83 @@ resource "aws_subnet" "private" {
   }
 }
 
-# TGW VPC attachment: attach the VPC to the Transit Gateway.
-resource "aws_ec2_transit_gateway_vpc_attachment" "main" {
-  transit_gateway_id = aws_ec2_transit_gateway.main.id
-  vpc_id             = aws_vpc.main.id
-  subnet_ids         = aws_subnet.private[*].id
-  dns_support        = "enable"
-  ipv6_support       = "disable"
+# One public subnet per AZ (for NAT gateway placement); CIDR distinct from private.
+resource "aws_subnet" "public" {
+  count             = length(var.networking_azs)
+  vpc_id            = aws_vpc.main.id
+  availability_zone = var.networking_azs[count.index]
+  cidr_block = cidrsubnet(
+    local.all_vpc_cidrs[count.index % length(local.all_vpc_cidrs)],
+    4,
+    length(var.networking_azs) + count.index,
+  )
+  depends_on = [aws_vpc_ipv4_cidr_block_association.additional]
+  map_public_ip_on_launch = true
   tags = {
-    Name = "${var.name_prefix}-tgw-attach"
+    Name = "${var.name_prefix}-public-${var.networking_azs[count.index]}"
   }
 }
 
-# Route table for the private subnets: send 0.0.0.0/0 to the TGW.
-resource "aws_route_table" "private" {
+# Public route table: 0.0.0.0/0 -> IGW (so NAT gateway can reach internet)
+resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
   tags = {
-    Name = "${var.name_prefix}-private-rt"
+    Name = "${var.name_prefix}-public-rt"
   }
 }
 
-resource "aws_route" "default_via_tgw" {
-  route_table_id         = aws_route_table.private.id
+resource "aws_route" "public_default" {
+  route_table_id         = aws_route_table.public.id
   destination_cidr_block = "0.0.0.0/0"
-  transit_gateway_id     = aws_ec2_transit_gateway.main.id
-  depends_on             = [aws_ec2_transit_gateway_vpc_attachment.main]
+  gateway_id             = aws_internet_gateway.main.id
 }
 
-# Associate the route table with each private subnet.
+resource "aws_route_table_association" "public" {
+  count          = length(aws_subnet.public)
+  subnet_id      = aws_subnet.public[count.index].id
+  route_table_id = aws_route_table.public.id
+}
+
+# Elastic IP per AZ for NAT gateway
+resource "aws_eip" "nat" {
+  count  = length(var.networking_azs)
+  domain = "vpc"
+  tags = {
+    Name = "${var.name_prefix}-nat-eip-${var.networking_azs[count.index]}"
+  }
+  depends_on = [aws_internet_gateway.main]
+}
+
+# NAT gateway per AZ (in public subnet) for private subnet egress
+resource "aws_nat_gateway" "main" {
+  count         = length(var.networking_azs)
+  allocation_id = aws_eip.nat[count.index].id
+  subnet_id     = aws_subnet.public[count.index].id
+  tags = {
+    Name = "${var.name_prefix}-nat-${var.networking_azs[count.index]}"
+  }
+  depends_on = [aws_route_table_association.public]
+}
+
+# Private route table per AZ: 0.0.0.0/0 -> this AZ's NAT gateway
+resource "aws_route_table" "private" {
+  count  = length(var.networking_azs)
+  vpc_id = aws_vpc.main.id
+  tags = {
+    Name = "${var.name_prefix}-private-rt-${var.networking_azs[count.index]}"
+  }
+}
+
+resource "aws_route" "private_default" {
+  count                   = length(var.networking_azs)
+  route_table_id         = aws_route_table.private[count.index].id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.main[count.index].id
+}
+
+# Associate each private subnet with its AZ's private route table
 resource "aws_route_table_association" "private" {
   count          = length(aws_subnet.private)
   subnet_id      = aws_subnet.private[count.index].id
-  route_table_id = aws_route_table.private.id
+  route_table_id = aws_route_table.private[count.index].id
 }

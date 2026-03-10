@@ -117,7 +117,7 @@ resource "terraform_data" "validate_inputs" {
   }
 }
 
-# Networking module: VPC, subnets, Transit Gateway, TGW attachment, and route (0.0.0.0/0 -> TGW).
+# Networking module: VPC, public/private subnets, IGW, NAT gateway(s), and routes (private -> NAT -> IGW).
 # Only created when create_networking is true; otherwise use existing vpc_id and subnets.
 module "networking" {
   count  = var.create_networking ? 1 : 0

@@ -24,10 +24,10 @@ variable "aws_account_id" {
   type        = string
 }
 
-# When true, this repo creates the VPC, subnets, Transit Gateway, TGW attachment, and routes.
+# When true, this repo creates the VPC, public subnets (for NAT), private subnets (for ECS), IGW, NAT gateway(s), and routes.
 # When false, you must provide vpc_id and subnets (existing VPC/subnets).
 variable "create_networking" {
-  description = "When true, create VPC, subnets, Transit Gateway, attachment, and route (0.0.0.0/0 -> TGW). When false, use existing vpc_id and subnets."
+  description = "When true, create VPC, public/private subnets, IGW, NAT gateway(s), and routes (private -> NAT -> IGW). When false, use existing vpc_id and subnets."
   type        = bool
   default     = false
 }

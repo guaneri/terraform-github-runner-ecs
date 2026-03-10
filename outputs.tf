@@ -100,11 +100,11 @@ output "networking_vpc_cidrs" {
 }
 
 output "networking_subnet_ids" {
-  description = "IDs of the subnets created by the networking module. Set only when create_networking is true."
+  description = "IDs of the private subnets created by the networking module. Set only when create_networking is true."
   value       = var.create_networking ? module.networking[0].subnet_ids : null
 }
 
-output "networking_transit_gateway_id" {
-  description = "ID of the Transit Gateway created by the networking module. Set only when create_networking is true."
-  value       = var.create_networking ? module.networking[0].transit_gateway_id : null
+output "networking_nat_gateway_ids" {
+  description = "IDs of the NAT gateways created by the networking module. Set only when create_networking is true."
+  value       = var.create_networking ? module.networking[0].nat_gateway_ids : null
 }

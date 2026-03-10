@@ -1,6 +1,6 @@
 # Deploy Networking workflow
 
-This document describes the **Deploy networking only** GitHub Actions workflow (`deploy-networking.yml`). Use it to create or update only the networking resources (VPC, subnets, Transit Gateway, attachment, and routes) using a **separate Terraform state file**, without touching the main runner deployment state.
+This document describes the **Deploy networking only** GitHub Actions workflow (`deploy-networking.yml`). Use it to create or update only the networking resources (VPC, public/private subnets, NAT gateway, IGW, and routes) using a **separate Terraform state file**, without touching the main runner deployment state.
 
 ## What it does
 
@@ -11,7 +11,7 @@ This document describes the **Deploy networking only** GitHub Actions workflow (
 
 Use this workflow to:
 
-- Test or create networking (VPC, subnets, TGW) in isolation before running a full deployment.
+- Test or create networking (VPC, subnets, NAT gateway, IGW) in isolation before running a full deployment.
 - Create networking once, then run the main deployment workflow with `create_networking` and the same CIDR/AZs so the main state can reference the same resources, or to inspect what the networking module would create.
 
 ## What gets created
@@ -20,14 +20,15 @@ When you run **deploy**, the workflow applies only `module.networking`, which cr
 
 | Resource | Description |
 |----------|-------------|
-| **Transit Gateway** | Regional TGW for routing. |
 | **VPC** | One VPC with the CIDR you set in `SHARED_VPC_CIDR`. |
-| **Private subnets** | One subnet per AZ in `SHARED_NETWORKING_AZS`, with CIDRs derived from the VPC CIDR. |
-| **TGW VPC attachment** | Attaches the VPC to the Transit Gateway using those subnets. |
-| **Route table** | One route table with a default route `0.0.0.0/0` → Transit Gateway. |
-| **Route table associations** | Associates that route table with each created subnet. |
+| **Internet Gateway** | Attached to the VPC for NAT gateway egress to the internet. |
+| **Public subnets** | One per AZ in `SHARED_NETWORKING_AZS`, for NAT gateway placement. |
+| **Private subnets** | One per AZ, for ECS/runners (CIDRs derived from the VPC CIDR). |
+| **NAT gateways** | One per AZ, in the public subnets. |
+| **Public route table** | Default route `0.0.0.0/0` → IGW; associated with public subnets. |
+| **Private route tables** | One per AZ; each has `0.0.0.0/0` → that AZ's NAT gateway; associated with the private subnets. |
 
-Egress from the runner VPC is sent to the TGW. For traffic to reach the internet or other networks, the TGW must have additional attachments and routing configured elsewhere (e.g. egress VPC with NAT or firewall).
+Egress from the runner VPC flows: ECS → private subnet route table → NAT gateway → IGW → internet.
 
 ## How to run it
 
@@ -62,7 +63,7 @@ Rules:
 
 - Use a private RFC1918 range (`10.0.0.0/8`, `172.16.0.0/12`, or `192.168.0.0/16`).
 - Do not overlap with existing VPC CIDRs in this account/region.
-- Do not overlap with networks reachable through TGW, peering, VPN, or Direct Connect.
+- Do not overlap with other VPCs or networks you need to reach (e.g. peering, VPN, Direct Connect).
 - Keep it consistent with your subnet sizing plan (this module derives subnets from the VPC CIDR).
 
 Address space sizing:
@@ -93,8 +94,7 @@ Check in AWS Console:
 
 1. Open **AWS Console** in the target account and region.
 2. Go to **VPC** → **Your VPCs**.
-3. Review the **CIDRs** column for existing VPC ranges.
-4. If Transit Gateway is used, also check **VPC** → **Transit Gateway Attachments** (and any peering/VPN/direct connect routes your team uses) to avoid overlap with connected networks.
+3. Review the **CIDRs** column for existing VPC ranges and ensure your chosen CIDR does not overlap.
 
 Check in CloudShell (same account/region):
 
@@ -106,12 +106,6 @@ AWS_REGION="us-east-1"
 aws ec2 describe-vpcs \
   --region "$AWS_REGION" \
   --query "Vpcs[*].[VpcId,CidrBlock,Tags[?Key=='Name']|[0].Value]" \
-  --output table
-
-# Optional: list TGW VPC attachments in this region (to understand connected VPCs)
-aws ec2 describe-transit-gateway-vpc-attachments \
-  --region "$AWS_REGION" \
-  --query "TransitGatewayVpcAttachments[*].[TransitGatewayAttachmentId,TransitGatewayId,VpcId,State]" \
   --output table
 ```
 
@@ -132,7 +126,7 @@ Choose a block that is:
   - `172.16.0.0/12`
   - `192.168.0.0/16`
 - Not present in your current VPC CIDR list.
-- Not overlapping TGW-connected networks.
+- Not overlapping other VPCs or connected networks you need to reach.
 - Allowed by your org IP policy or IPAM (if used).
 
 What is RFC1918?
@@ -144,10 +138,6 @@ RFC1918 private IPv4 ranges:
 - `192.168.0.0/16` (192.168.0.0 - 192.168.255.255)
 
 In AWS VPCs, use CIDRs from one of these private ranges.
-
-Did we already run a TGW check?
-
-Yes. `describe-transit-gateway-vpc-attachments` is the TGW connectivity check. It tells you which VPCs are attached; then compare their CIDRs from `describe-vpcs` to ensure no overlap.
 
 How to check org policy or IPAM in CloudShell:
 
@@ -185,15 +175,6 @@ aws ec2 describe-vpcs \
   --output table
 ```
 
-If using Transit Gateway, list attached VPCs (connected networks):
-
-```bash
-aws ec2 describe-transit-gateway-vpc-attachments \
-  --region "$AWS_REGION" \
-  --query "TransitGatewayVpcAttachments[*].[TransitGatewayAttachmentId,TransitGatewayId,VpcId,State]" \
-  --output table
-```
-
 Optional quick CIDR-only view:
 
 ```bash
@@ -215,7 +196,7 @@ Choose a block that is:
   - `172.16.0.0/12`
   - `192.168.0.0/16`
 - Not present in your current VPC CIDR list.
-- Not overlapping TGW-connected networks.
+- Not overlapping other VPCs or connected networks.
 - Allowed by your org IP policy/IPAM (if used).
 
 Why those ranges (they are not random):
@@ -233,10 +214,6 @@ RFC1918 private IPv4 ranges:
 - `192.168.0.0/16` (192.168.0.0 - 192.168.255.255)
 
 In AWS VPCs, use CIDRs from one of these private ranges.
-
-#### Did we already run a TGW check?
-
-Yes. `describe-transit-gateway-vpc-attachments` is the TGW connectivity check. It tells you which VPCs are attached; then compare their CIDRs from `describe-vpcs` to ensure no overlap.
 
 #### How to check org policy / IPAM in CloudShell
 
@@ -274,5 +251,5 @@ If `describe-ipam-pools` output only shows the header (for example `DescribeIpam
   ```
   If an error includes **"explicit deny in a service control policy"**, treat it as account/region/SCP scope first (not a networking module bug).
 - **Plan/apply fails on variables:** Ensure `SHARED_VPC_CIDR`, `SHARED_NETWORKING_AZS`, `TF_NETWORKING_STATE_KEY`, and `SHARED_AWS_REGION` are set. If used, `SHARED_VPC_ADDITIONAL_CIDRS` must be a JSON array string (for example `["10.41.0.0/16"]`). `SHARED_NETWORKING_AZS` must be a JSON array string, e.g. `["us-east-1a","us-east-1d"]`.
-- **AWS permission errors:** The role specified in `SHARED_AWS_ROLE_NAME` needs permissions to create and manage EC2 VPCs, subnets, and Transit Gateway resources (e.g. `ec2:CreateVpc`, `ec2:CreateSubnet`, `ec2:CreateTransitGateway`, and related APIs).
+- **AWS permission errors:** The role specified in `SHARED_AWS_ROLE_NAME` needs permissions to create and manage VPCs, subnets, Internet Gateways, NAT gateways, EIPs, and route tables (e.g. `ec2:CreateVpc`, `ec2:CreateSubnet`, `ec2:CreateInternetGateway`, `ec2:CreateNatGateway`, `ec2:AllocateAddress`, and related APIs).
 - **Backend errors:** Confirm `TF_BACKEND_BUCKET` exists, is in the same region as `SHARED_AWS_REGION`, and the OIDC role has `s3:GetObject`, `s3:PutObject`, and (if using locking) `dynamodb:*` on the state bucket/key and optional DynamoDB table.

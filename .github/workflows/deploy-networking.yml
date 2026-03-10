@@ -1,5 +1,5 @@
 ###############################################################################
-# Workflow: Deploy networking only (VPC, subnets, Transit Gateway)
+# Workflow: Deploy networking only (VPC, subnets, NAT gateway, IGW)
 #
 # Purpose:
 # - Run Terraform plan/apply only for module.networking using a separate
@@ -51,7 +51,7 @@ jobs:
       TF_CLI_ARGS_init: -upgrade
       TF_CLI_ARGS_plan: -input=false
 
-      # Networking: create VPC, subnets, TGW; all from Variables (no hardcoded values).
+      # Networking: create VPC, subnets, NAT gateway, IGW; all from Variables (no hardcoded values).
       TF_VAR_create_networking: 'true'
       TF_VAR_vpc_cidr: ${{ vars.SHARED_VPC_CIDR }}
       TF_VAR_vpc_additional_cidrs: ${{ vars.SHARED_VPC_ADDITIONAL_CIDRS || '[]' }}
