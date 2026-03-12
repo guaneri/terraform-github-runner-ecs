@@ -8,7 +8,7 @@
 # 1. Input validation - Ensures required variables are set based on launch type
 #    and runner service configuration
 # 2. Infrastructure module - Creates shared ECS cluster, capacity providers,
-#    networking, and EC2 instances (if using EC2 launch type)
+#    and EC2 instances (if using EC2 launch type)
 # 3. Runner service modules - Creates one or more ECS services that run
 #    GitHub Actions runner containers, supporting multiple organizations or
 #    repositories
@@ -55,9 +55,8 @@ locals {
 
   effective_runner_services = length(var.runner_services) > 0 ? var.runner_services : local._default_runner_services
 
-  # When create_networking is true, use networking module outputs; otherwise use provided vpc_id and subnets.
-  effective_vpc_id  = var.create_networking ? module.networking[0].vpc_id : var.vpc_id
-  effective_subnets = var.create_networking ? module.networking[0].subnet_ids : var.subnets
+  effective_vpc_id  = var.vpc_id
+  effective_subnets = var.subnets
 }
 
 # Input validation resource
@@ -94,44 +93,16 @@ resource "terraform_data" "validate_inputs" {
       error_message = "Each runner_services entry must include non-empty github_org and runner_token_ssm_parameter_name."
     }
 
-    # When create_networking is false, vpc_id and subnets must be provided.
+    # vpc_id and subnets must always be provided.
     precondition {
-      condition     = var.create_networking || (trimspace(var.vpc_id) != "" && length(var.subnets) > 0)
-      error_message = "When create_networking is false, vpc_id and subnets must both be set."
-    }
-
-    # When create_networking is true, vpc_cidr and networking_azs must be provided.
-    precondition {
-      condition     = !var.create_networking || (trimspace(var.vpc_cidr) != "" && length(var.networking_azs) > 0)
-      error_message = "When create_networking is true, vpc_cidr and networking_azs must both be set."
-    }
-
-    # Optional additional CIDRs must be non-empty and unique.
-    precondition {
-      condition = !var.create_networking || (
-        alltrue([for c in var.vpc_additional_cidrs : trimspace(c) != ""]) &&
-        length(distinct(concat([var.vpc_cidr], var.vpc_additional_cidrs))) == length(var.vpc_additional_cidrs) + 1
-      )
-      error_message = "When create_networking is true, vpc_additional_cidrs must not contain empty or duplicate CIDR values."
+      condition     = trimspace(var.vpc_id) != "" && length(var.subnets) > 0
+      error_message = "vpc_id and subnets must both be set."
     }
   }
 }
 
-# Networking module: VPC, public/private subnets, IGW, NAT gateway(s), and routes (private -> NAT -> IGW).
-# Only created when create_networking is true; otherwise use existing vpc_id and subnets.
-module "networking" {
-  count  = var.create_networking ? 1 : 0
-  source = "./modules/networking"
-
-  vpc_cidr             = var.vpc_cidr
-  vpc_additional_cidrs = var.vpc_additional_cidrs
-  networking_azs       = var.networking_azs
-  name_prefix          = coalesce(trimspace(var.infra_name_prefix), var.cluster_name)
-}
-
 # Infrastructure module
-# Creates the shared ECS cluster, capacity providers, networking resources,
-# and EC2 Auto Scaling Group (if using EC2 launch type)
+# Creates the shared ECS cluster, capacity providers, and EC2 Auto Scaling Group (if using EC2 launch type)
 module "runner_infra" {
   source     = "./modules/runner_infra"
   depends_on = [terraform_data.validate_inputs]
@@ -179,8 +150,8 @@ module "runner_service" {
   launch_type            = var.launch_type                                # ECS launch type: "EC2" or "FARGATE"
   capacity_provider_name = module.runner_infra.ec2_capacity_provider_name # Name of the EC2 capacity provider (from runner_infra module output)
 
-  vpc_id             = local.effective_vpc_id                                              # VPC: from networking module when create_networking, else var.vpc_id
-  subnets            = local.effective_subnets                                             # Subnets: from networking module when create_networking, else var.subnets
+  vpc_id             = local.effective_vpc_id   # VPC where runners will run (you provide vpc_id)
+  subnets            = local.effective_subnets  # Private subnets for ECS tasks (you provide subnets)
   security_group_ids = coalesce(
     try(each.value.security_group_ids, null),
     var.security_group_ids

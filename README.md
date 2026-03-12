@@ -10,6 +10,7 @@ This guide will help you deploy your own GitHub Actions runners on Amazon Web Se
 - [Repository layout](#repository-layout)
 - [Architecture](#architecture)
   - [Network ingress/egress (connecting to runners)](#network-ingressegress-connecting-to-runners)
+  - [Implementing networking yourself](#implementing-networking-yourself)
   - [Autoscaling and scale configuration](#autoscaling-and-scale-configuration)
   - [Third-party connectivity](#third-party-connectivity)
   - [Permissions management](#permissions-management)
@@ -68,14 +69,12 @@ You're going to create:
 
 This repository is organized as follows:
 
-- **Root Terraform** – `main.tf` (orchestration, networking module wiring, runner_infra and runner_service), `variables.tf`, `outputs.tf`, `providers.tf`. Optional `env/*.tfvars` for local or CI overrides.
+- **Root Terraform** – `main.tf` (orchestration, runner_infra and runner_service), `variables.tf`, `outputs.tf`, `providers.tf`. Optional `env/*.tfvars` for local or CI overrides.
 - **Terraform modules**
   - `modules/runner_infra` – ECS cluster, capacity providers, EC2 ASG (if EC2 launch type), security groups.
   - `modules/runner_service` – ECS service, task definition, EFS, KMS, security groups per runner service.
-  - `modules/networking` – Optional: VPC, public subnets (for NAT), private subnets (for ECS), IGW, NAT gateway(s), route tables (private → NAT → IGW). Used when `create_networking` is true.
 - **GitHub Actions workflows** (`.github/workflows/`)
-  - **deployment.yml** – Main deployment: plan/deploy/destroy the full stack (runners, ECS, EFS, and optionally networking). When `SHARED_CREATE_NETWORKING` is true, it creates the VPC, subnets, NAT gateway, and IGW in the same run.
-  - **deploy-networking.yml** – Optional: plan/deploy only the networking module using a **separate state file**. See [Deploy networking only](.github/workflows/deploy-networking-README.md) for details.
+  - **deployment.yml** – Main deployment: plan/deploy/destroy the full stack (runners, ECS, EFS). Requires a VPC and subnets that you provide (see [Implementing networking yourself](#implementing-networking-yourself)).
   - **docker-build.yml** – Build and push the runner Docker image to ECR. See [Docker build workflow](.github/workflows/docker-build-README.md).
 - **Other** – `docker/` (Dockerfile), `scripts/` (e.g. IAM setup), `tests/` (Terraform test fixtures).
 
@@ -90,9 +89,8 @@ The following diagram shows the full picture: main architecture (VPC, subnets, E
                     │  return along the same path.
                     ▼
   ┌─────────────────────────────────────────────────────────────────────────────┐
-  │  NAT gateway → IGW. When create_networking = true we create the VPC,         │
-  │  public subnets (for NAT), private subnets (for ECS), IGW, NAT gateway(s),   │
-  │  and routes (private → NAT → IGW).                                            │
+  │  You provide a VPC and subnets; egress uses NAT gateway and IGW              │
+  │  (or your chosen path). See Implementing networking yourself below.          │
   └─────────────────────────────────────────────────────────────────────────────┘
                     │
                     │  Route: 0.0.0.0/0 → NAT gateway → IGW
@@ -122,7 +120,7 @@ The following diagram shows the full picture: main architecture (VPC, subnets, E
 
 #### Main architecture (VPC, subnets, ECS runners, EFS)
 
-This diagram shows what this repo deploys: a VPC and subnets (either your `vpc_id` and `subnets` or ones we create when `create_networking = true`), with ECS (EC2 or Fargate) running the GitHub runner in each subnet, each with an EFS mount to a single shared EFS filesystem.
+This diagram shows what this repo deploys: a VPC and subnets that you provide, with ECS (EC2 or Fargate) running the GitHub runner in each subnet, each with an EFS mount to a single shared EFS filesystem.
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────────────┐
@@ -161,11 +159,11 @@ This diagram shows what this repo deploys: a VPC and subnets (either your `vpc_i
 
 - **Network ingress/egress** – Runners sit in private subnets with no public IP. **Egress**: outbound traffic (to GitHub, AWS APIs, package registries) goes from runners via the **private subnet route table** (0.0.0.0/0 → NAT gateway) to the **NAT gateway**, then to the **Internet Gateway (IGW)**. **Ingress**: there is no inbound from the internet to the runners; security groups allow egress only, and runners poll GitHub for jobs instead of accepting incoming connections.
 
-In short: you get multiple EC2 instances (runner hosts) in the subnets you provide (or we create when `create_networking = true`), each with its own mount to one shared, encrypted EFS so they can do work for GitHub Actions and stay in sync. They reach the internet via your VPC's egress (private subnet → NAT gateway → IGW); nothing can connect in to the runners from the internet.
+In short: you get multiple EC2 instances (runner hosts) in the subnets you provide, each with its own mount to one shared, encrypted EFS so they can do work for GitHub Actions and stay in sync. They reach the internet via your VPC's egress (private subnet → NAT gateway → IGW); nothing can connect in to the runners from the internet.
 
 #### Network ingress/egress (connecting to runners)
 
-Egress uses **NAT gateway and IGW**. To work out of the box, set **`create_networking = true`**: this repo creates the VPC, public subnets (for NAT), private subnets (for ECS), Internet Gateway, NAT gateway(s), and route tables (private → NAT → IGW). Alternatively, **bring your own** VPC and subnets (with that egress route already set) and pass `vpc_id` and `subnets`. The diagram shows **egress** (outbound via NAT → IGW) and **ingress** (none to runners).
+Egress uses **NAT gateway and IGW**. You must provide a VPC and subnets that have outbound internet (e.g. private subnets with a route 0.0.0.0/0 → NAT gateway → IGW). This repo does not create the VPC or subnets; see [Implementing networking yourself](#implementing-networking-yourself) for how to create them. The diagram shows **egress** (outbound via NAT → IGW) and **ingress** (none to runners).
 
 ```text
   Internet (GitHub, package registries, AWS APIs)
@@ -174,18 +172,14 @@ Egress uses **NAT gateway and IGW**. To work out of the box, set **`create_netwo
                     │  return along the same path.
                     ▼
   ┌─────────────────────────────────────────────────────────────────────────────┐
-  │  NAT gateway → IGW. When create_networking = true we create the VPC,         │
-  │  public subnets (for NAT), private subnets (for ECS), IGW, NAT gateway(s),   │
-  │  and routes (private → NAT → IGW).                                            │
+  │  You provide a VPC and subnets; egress via NAT gateway → IGW.                 │
   └─────────────────────────────────────────────────────────────────────────────┘
                     │
                     │  Route: 0.0.0.0/0 → NAT gateway → IGW
                     ▼
   ┌─────────────────────────────────────────────────────────────────────────────┐
-  │  VPC and subnets – runners, ECS, EFS                                         │
-  │  When create_networking = true we create VPC, subnets, NAT gateway, and IGW; otherwise     │
-  │  use your vpc_id + subnets. Runners have only private IPs.                    │
-  │  Ingress: none. Runners poll GitHub; no connections from the internet in.    │
+  │  VPC and subnets (your vpc_id + subnets) – runners, ECS, EFS.                 │
+  │  Runners have only private IPs. Ingress: none.                               │
   └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -352,7 +346,7 @@ Before you begin, make sure you have:
 4. **Docker Installed** - To build the runner image
    - Download: https://www.docker.com/get-started
 5. **GitHub Access** - Admin access to the GitHub organization or repository where you want to add runners
-6. **A VPC in AWS** - A virtual network (we'll help you check this), or use create networking so the repo creates it
+6. **A VPC in AWS** - A virtual network with at least two private subnets (we'll help you check this; see [Implementing networking yourself](#implementing-networking-yourself) if you need to create one)
 
 ## Step-by-Step Setup Guide
 
@@ -457,12 +451,11 @@ If your organization uses the **AWS Access Portal**, that is how you choose/sign
 
 You will run **Build & Push Docker Image** before you run **Multi-Org github runner Deployment**. Before both workflows, run the Python IAM setup script (`scripts/setup-github-actions-iam.py`) once to create/update the GitHub OIDC role and related IAM setup (here is how to run it: [scripts/README.md](scripts/README.md)), then add those outputs as repository secrets/variables. Those values are explained in the next section. For now, here is what each workflow is, what it does, and why it is important.
 
-There are three workflows plus one required setup script you will use during setup and deployment:
+There are two workflows plus one required setup script you will use during setup and deployment:
 
 1. **Python IAM Setup Script** (`scripts/setup-github-actions-iam.py`) – Creates/updates the AWS OIDC provider and IAM roles used by GitHub Actions. **Why it matters:** workflows cannot assume AWS roles without this setup. **When to run:** once before running workflows (or again if you need to update IAM settings). How to run: [scripts/README.md](scripts/README.md).
 2. **Build & Push Docker Image** (`.github/workflows/docker-build.yml`) – Builds the runner Docker image from `docker/dockerfile` and pushes it to ECR. **Why it matters:** `deployment.yml` needs a valid image URI (`SHARED_RUNNER_IMAGE`) to start runner tasks. **When to run:** first-time setup after running python iam setup script and before running the multi-org github runner deployment workflow, and any time you change Docker image content. See [.github/workflows/docker-build-README.md](.github/workflows/docker-build-README.md).
-3. **Multi-Org github runner Deployment** (`.github/workflows/deployment.yml`) – Main infrastructure workflow that runs Terraform plan/deploy/destroy for ECS runners, EFS, IAM, and optional networking. **Why it matters:** this is the workflow that actually creates and updates your runner platform. **When to run:** after required secrets/variables are configured and after build & push docker image workflow runs.
-4. **Deploy networking only** (`.github/workflows/deploy-networking.yml`) – Optional Terraform workflow focused only on networking resources (VPC, subnets, NAT gateway, IGW) using a separate state key. **Why it matters:** lets you test or manage networking independently from the full deployment. **When to run:** when validating networking in isolation or when you want networking changes separately controlled. See [.github/workflows/deploy-networking-README.md](.github/workflows/deploy-networking-README.md).
+3. **Multi-Org github runner Deployment** (`.github/workflows/deployment.yml`) – Main infrastructure workflow that runs Terraform plan/deploy/destroy for ECS runners, EFS, and IAM. **Why it matters:** this is the workflow that actually creates and updates your runner platform. **When to run:** after required secrets/variables are configured and after build & push docker image workflow runs. You must provide a VPC and subnets (see [Implementing networking yourself](#implementing-networking-yourself) if you need to create them).
 
 **What the workflow needs:**
 
@@ -473,8 +466,8 @@ The workflow requires you to set up GitHub repository secrets and variables. Her
 | Secret Name | Example Value | Why You Need This | Where to Get This |
 |------------|---------------|-------------------|-------------------|
 | `SHARED_AWS_ACCOUNT_ID` | `123456789012` | Used to construct ARNs and assume IAM roles. The workflow needs this to authenticate with AWS using OIDC. | See Step 1 for instructions. |
-| `SHARED_VPC_ID` | `vpc-0123456789abcdef0` | VPC ID for runner deployment when **bring your own networking** is used (`SHARED_CREATE_NETWORKING=false`). | See Step 3 for instructions. Not needed when `SHARED_CREATE_NETWORKING=true`. |
-| `SHARED_SUBNETS` | `subnet-0123456789abcdef0,subnet-0fedcba9876543210` | Subnet IDs for runner deployment when **bring your own networking** is used (`SHARED_CREATE_NETWORKING=false`). | See Step 3 for instructions. Not needed when `SHARED_CREATE_NETWORKING=true`. |
+| `SHARED_VPC_ID` | `vpc-0123456789abcdef0` | VPC ID where runners will run. Required. | See Step 3 or [Implementing networking yourself](#implementing-networking-yourself). |
+| `SHARED_SUBNETS` | `subnet-0123456789abcdef0,subnet-0fedcba9876543210` | Comma-separated subnet IDs for runner deployment. Required. | See Step 3 or [Implementing networking yourself](#implementing-networking-yourself). |
 | `SHARED_SECURITY_GROUP_IDS` | `sg-0123456789abcdef0` | Security groups act as virtual firewalls controlling inbound and outbound traffic. The runners need appropriate security group rules to communicate with GitHub, AWS services, and your internal resources. | See Step 3 for instructions. If you need to create new security groups, ask your AWS administrator or security team about the required rules (typically: outbound HTTPS to GitHub, outbound HTTPS to AWS APIs, and any internal network access needed). |
 | `SHARED_RUNNER_SERVICE_NAME` | `default`, `production-runners`, `team-a-runners` | This is an identifier for your ECS service. It helps organize multiple runner services if you deploy runners for different teams or environments. Choose a descriptive name that makes sense for your organization. | Pick a name that describes the purpose (e.g., `default` for a single service, `prod-runners` for production, `dev-runners` for development). This is just a label - you decide what makes sense. |
 | `SHARED_GITHUB_ORG` | `my-company`, `acme-corp`, `engineering-team` | This tells the runner which GitHub organization to register with. The runner will appear in that organization's runner list and can execute workflows for repositories in that org. | This is the name that appears in your GitHub organization URL: `https://github.com/YOUR_ORG_NAME`. If you're deploying for a repository instead of an organization, you may need to check with your GitHub administrator about the correct value. |
@@ -487,11 +480,7 @@ The workflow requires you to set up GitHub repository secrets and variables. Her
 | Variable Name | Example Value | Why You Need This | Where to Get This |
 |--------------|---------------|-------------------|-------------------|
 | `SHARED_AWS_REGION` | `us-east-1`, `us-west-2`, `eu-west-1`, `ap-southeast-2` | All AWS resources (ECS cluster, EC2 instances, etc.) will be created in this region. Choose a region close to your users or that meets compliance requirements. | See Step 1 for instructions. If unsure, ask your AWS administrator about your organization's preferred region. |
-| `TF_STATE_KEY` | `github-runner/terraform.tfstate` | S3 object key used by `deployment.yml` Terraform backend state. Must be different from `TF_NETWORKING_STATE_KEY` if you also use `deploy-networking.yml`. | Pick a unique path in your state bucket (for example per env/account). |
-| `SHARED_CREATE_NETWORKING` | `true` or `false` | Controls networking mode in `deployment.yml`: `true` creates VPC/subnets/NAT gateway/IGW; `false` uses `SHARED_VPC_ID`/`SHARED_SUBNETS`. | Set based on your deployment mode. |
-| `SHARED_VPC_CIDR` | `10.40.0.0/16` | Primary VPC CIDR when `SHARED_CREATE_NETWORKING=true`. | Choose a private non-overlapping CIDR (`/16` to `/28` for primary VPC CIDR). |
-| `SHARED_VPC_ADDITIONAL_CIDRS` | `["10.41.0.0/16"]` | Optional additional VPC CIDRs when `SHARED_CREATE_NETWORKING=true`. | Optional JSON array; use `[]` or leave unset if not needed. |
-| `SHARED_NETWORKING_AZS` | `["us-east-1a","us-east-1d"]` | AZ list for subnet creation when `SHARED_CREATE_NETWORKING=true`. | Pick at least 2 AZs in your region; must be valid JSON array. |
+| `TF_STATE_KEY` | `github-runner/terraform.tfstate` | S3 object key used by `deployment.yml` Terraform backend state. | Pick a unique path in your state bucket (for example per env/account). |
 | `SHARED_RUNNER_IMAGE` | `123456789012.dkr.ecr.us-east-1.amazonaws.com/github-runner:latest` | This is the Docker image that contains the GitHub Actions runner software. ECS will pull this image and run it as containers on your EC2 instances. | See Step 6 for instructions. The format is: `ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/REPOSITORY_NAME:TAG` |
 | `SHARED_DESIRED_COUNT` | `1`, `2`, `5` | This controls how many runner containers will be running simultaneously. More runners = more workflows can run in parallel, but also higher AWS costs. Start with 1 and increase if you need more parallel capacity. | Consider your typical workflow load. If you have many concurrent workflows, you may need 2-5 runners. If workflows run sequentially, 1 is usually sufficient. You can always change this later and redeploy. |
 | `SHARED_DEPLOYMENT_MIN_HEALTHY_PERCENT` | `100` | Optional ECS deployment setting used in `runner_services`. Defaults to `100` if unset. | Optional tuning value. |
@@ -520,7 +509,7 @@ A VPC is like a private network in AWS. You need one with:
      aws ec2 modify-vpc-attribute --vpc-id vpc-12345678 --enable-dns-support
      ```
 
-**Don't have a VPC?** Ask your AWS administrator to create one, or create a simple one in the AWS Console (VPC → Create VPC). If you use **create networking** (`SHARED_CREATE_NETWORKING` = `true`), you can skip this step—the repo will create the VPC and subnets for you.
+**Don't have a VPC?** Ask your AWS administrator to create one, or see [Implementing networking yourself](#implementing-networking-yourself) for guidance on creating a VPC and subnets with the right egress (e.g. NAT gateway and IGW).
 
 **Why you need this:** The deployment workflow needs your VPC ID, subnet IDs, and security group IDs for the `SHARED_VPC_ID`, `SHARED_SUBNETS`, and `SHARED_SECURITY_GROUP_IDS` secrets you'll set up in Step 8.
 
@@ -665,8 +654,8 @@ Go to your GitHub repository → **Settings** → **Secrets and variables** → 
 | Secret Name | What to Enter | Example Value | Why You Need This | Where You Got This |
 |------------|---------------|---------------|-------------------|-------------------|
 | `SHARED_AWS_ACCOUNT_ID` | Your 12-digit AWS account ID | `123456789012` | Used by the workflow to construct AWS ARNs and assume IAM roles for authentication | **Step 1** - Found in AWS Console or via `aws sts get-caller-identity` |
-| `SHARED_VPC_ID` | Your VPC ID | `vpc-0123456789abcdef0` | Required only when **bring your own networking** is used (`SHARED_CREATE_NETWORKING=false`) | **Step 3** - Found in AWS Console (VPC → Your VPCs). Leave unset when `SHARED_CREATE_NETWORKING=true` |
-| `SHARED_SUBNETS` | Comma-separated subnet IDs (no spaces) | `subnet-0123456789abcdef0,subnet-0fedcba9876543210` | Required only when **bring your own networking** is used (`SHARED_CREATE_NETWORKING=false`) | **Step 3** - Found in AWS Console (VPC → Subnets). Leave unset when `SHARED_CREATE_NETWORKING=true` |
+| `SHARED_VPC_ID` | Your VPC ID | `vpc-0123456789abcdef0` | Required. VPC where runners will run. | **Step 3** or [Implementing networking yourself](#implementing-networking-yourself) |
+| `SHARED_SUBNETS` | Comma-separated subnet IDs (no spaces) | `subnet-0123456789abcdef0,subnet-0fedcba9876543210` | Required. Subnet IDs for runner deployment. | **Step 3** or [Implementing networking yourself](#implementing-networking-yourself) |
 | `SHARED_SECURITY_GROUP_IDS` | Comma-separated security group IDs (no spaces) | `sg-0123456789abcdef0` | Controls network traffic rules (firewall) for the runners. Must allow outbound HTTPS to GitHub and AWS APIs | **Step 3** - Found in AWS Console (VPC → Security Groups). If you need to create new ones, ask your security team about required rules |
 | `SHARED_RUNNER_SERVICE_NAME` | A name for your runner service | `default` or `production-runners` | Identifies this ECS service. Used for organization if you have multiple runner services | **You choose this** - Pick a descriptive name. Common: `default`, `prod-runners`, `dev-runners`, `team-a-runners` |
 | `SHARED_GITHUB_ORG` | Your GitHub organization name | `my-company` or `acme-corp` | The GitHub organization where runners will register and appear. Must match your org's URL name | **Your GitHub org** - Found in your GitHub org URL: `https://github.com/YOUR_ORG_NAME`. If deploying for a repo, check with your GitHub admin |
@@ -681,11 +670,7 @@ Go to **Settings** → **Secrets and variables** → **Actions** → **Variables
 | Variable Name | What to Enter | Example Value | Why You Need This | Where You Got This |
 |--------------|---------------|---------------|-------------------|-------------------|
 | `SHARED_AWS_REGION` | Your AWS region code | `us-east-1`, `us-west-2`, `eu-west-1` | All AWS resources will be created in this region. Choose based on proximity to users or compliance requirements | **Step 1** - Found in AWS Console top-right, or ask your AWS administrator about your org's preferred region |
-| `TF_STATE_KEY` | Terraform state key path used by deployment workflow | `github-runner/terraform.tfstate` | Backend state key used by `deployment.yml`; keep distinct from `TF_NETWORKING_STATE_KEY` used by networking-only workflow | **You choose this** - Use a unique key path per account/environment |
-| `SHARED_CREATE_NETWORKING` | `true` to create networking, `false` to use existing VPC/subnets | `true` | Controls mode in `deployment.yml` | **You choose this** - Set `true` for out-of-box networking creation |
-| `SHARED_VPC_CIDR` | Primary VPC CIDR (`/16` to `/28`) | `10.40.0.0/16` | Required when `SHARED_CREATE_NETWORKING=true` | **Step 8 networking guidance below** |
-| `SHARED_VPC_ADDITIONAL_CIDRS` | Optional JSON array of additional VPC CIDRs | `["10.41.0.0/16"]` | Optional when `SHARED_CREATE_NETWORKING=true` for extra address space | **Step 8 networking guidance below** |
-| `SHARED_NETWORKING_AZS` | JSON array of AZ names | `["us-east-1a","us-east-1d"]` | Required when `SHARED_CREATE_NETWORKING=true`; used to create one subnet per AZ | **Step 8 networking guidance below** |
+| `TF_STATE_KEY` | Terraform state key path used by deployment workflow | `github-runner/terraform.tfstate` | Backend state key used by `deployment.yml` | **You choose this** - Use a unique key path per account/environment |
 | `SHARED_RUNNER_IMAGE` | Full ECR image URI | `123456789012.dkr.ecr.us-east-1.amazonaws.com/github-runner:latest` | The Docker image containing the GitHub Actions runner software. ECS pulls this to run your runners | **Step 6** - The full image path after building and pushing to ECR. Format: `ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/REPOSITORY:TAG` |
 | `SHARED_DESIRED_COUNT` | Number of runners (as a number) | `1`, `2`, or `5` | How many runner containers to run simultaneously. More = more parallel workflows but higher cost | **You choose this** - Start with `1` for testing. Increase to 2-5 if you need more parallel capacity. Can change later |
 | `SHARED_DEPLOYMENT_MIN_HEALTHY_PERCENT` | Optional minimum healthy percent | `100` | Optional ECS deployment control; defaults to `100` if unset | **Optional** |
@@ -694,21 +679,6 @@ Go to **Settings** → **Secrets and variables** → **Actions** → **Variables
 | `SHARED_RUNNER_LABELS` | Comma-separated labels (no spaces after commas) | `self-hosted,team-a,ecs,ec2` or `self-hosted,linux,x64,production` | Used in `runs-on:` in workflows to target specific runners. Allows routing workflows to specific runner types | **You choose this** - Must include `self-hosted`. Add descriptive labels like team names, environment, or capabilities. Examples: `self-hosted,linux,x64,prod` or `self-hosted,team-a,docker,large` |
 | `SHARED_INSTANCE_AMI` | ECS-optimized AMI ID for your region | `ami-0123456789abcdef0` (varies by region) | The operating system image for EC2 instances. ECS-optimized AMI has Docker and ECS agent pre-installed | **See instructions below** - AMI ID is different for each region. Use the latest ECS-optimized AMI for your specific region. You can choose your own AMI using step 8's instructions or leave this blank for auto-discovery |
 | `SHARED_CLUSTER_NAME` | Optional cluster/resource name | `nexus-repo` | Optional naming value used by workflow; defaults to `nexus-repo` if unset | **Optional** |
-
-**3. Optional: Create networking (VPC, subnets, NAT gateway, IGW)**
-
-If you want this repo to **create** the VPC, public subnets (for NAT), private subnets (for ECS), **Internet Gateway**, **NAT gateway(s)**, and route(s) (so runner egress goes: private subnet → NAT gateway → IGW), set the following. Nothing is passed in: the repo creates the VPC, subnets, IGW, and NAT gateway(s). When this option is enabled, you do **not** set `SHARED_VPC_ID` or `SHARED_SUBNETS` (Terraform creates them).
-
-**How to set them:** In the same place as above — **Settings** → **Secrets and variables** → **Actions** → **Variables** tab. All of these are non-sensitive (CIDR, AZs, a flag); no secrets are required for create-networking, so nothing needs to be hidden from the repo.
-
-**Keeping the repo safe for public use:** Do not put real account IDs, VPC IDs, or subnet IDs in this repository or in repo Variables (they are visible to anyone with read access). Put resource IDs and other sensitive values in **Secrets**. When you use create-networking, the VPC, subnets, NAT gateway(s), and IGW are created by Terraform. The README and docs use only generic examples (e.g. `10.0.0.0/16`, `us-east-1a`); your actual values live only in GitHub Secrets and in your deployed AWS resources.
-
-| Name | Tab | What to Enter | Example | When |
-|------|-----|---------------|---------|------|
-| `SHARED_CREATE_NETWORKING` | **Variables** | `true` to create VPC, subnets, NAT gateway, IGW, and routes | `true` | Required when you want the repo to create networking. Omit or set `false` when using your own VPC/subnets. |
-| `SHARED_VPC_CIDR` | **Variables** | Primary CIDR block for the created VPC. AWS VPC primary CIDRs must be between `/16` and `/28`. Use a private range that does not overlap with other networks you need to reach. | `10.40.0.0/16` | Required when creating networking so Terraform knows the primary VPC CIDR. |
-| `SHARED_VPC_ADDITIONAL_CIDRS` | **Variables** | Optional JSON array of additional VPC CIDRs to associate after VPC creation. Use this when you want more address space (for example a second `/16`). | `["10.41.0.0/16"]` | Optional. Set to `[]` or leave unset if you only want one CIDR block. |
-| `SHARED_NETWORKING_AZS` | **Variables** | JSON array of availability zone names (e.g. two AZs in your region) so subnets are created in each. Ensures runners span AZs for availability. | `["us-east-1a","us-east-1d"]` | Required when creating networking. Must be valid JSON; region AZ codes are generic and safe for public repos. |
 
 ### Minimum required for `deployment.yml` (out-of-box run)
 
@@ -719,6 +689,8 @@ Required **Secrets**:
 - `SHARED_AWS_ACCOUNT_ID`
 - `SHARED_AWS_ROLE_NAME`
 - `TF_BACKEND_BUCKET`
+- `SHARED_VPC_ID`
+- `SHARED_SUBNETS`
 - `SHARED_RUNNER_SERVICE_NAME`
 - `SHARED_GITHUB_ORG`
 - `SHARED_RUNNER_TOKEN_SSM_PARAMETER_NAME`
@@ -731,220 +703,58 @@ Required **Variables**:
 - `SHARED_DESIRED_COUNT`
 - `SHARED_RUNNER_NAME_PREFIX`
 - `SHARED_RUNNER_LABELS`
-- `SHARED_INSTANCE_AMI` (will be used for EC2 launch type in this repo/workflow. If you don't set it, this code with auto-discover it)
+- `SHARED_INSTANCE_AMI` (will be used for EC2 launch type in this repo/workflow. If you don't set it, this code will auto-discover it)
 
-If `SHARED_CREATE_NETWORKING=true`, also set:
+### Implementing networking yourself
 
-- `SHARED_CREATE_NETWORKING=true`
-- `SHARED_VPC_CIDR`
-- `SHARED_NETWORKING_AZS`
-- Optional: `SHARED_VPC_ADDITIONAL_CIDRS` (JSON array, default `[]`)
+This repo does **not** create a VPC or subnets. You must provide them by setting the **Secrets** `SHARED_VPC_ID` and `SHARED_SUBNETS` (comma-separated subnet IDs). The following describes a pattern you can implement yourself so that runners have outbound internet (e.g. to GitHub and package registries) while staying in private subnets.
 
-When `SHARED_CREATE_NETWORKING=true`, you do **not** need:
+**Pattern to implement:** Create a VPC with **private subnets** (e.g. one per Availability Zone) where the ECS runner tasks will run. For egress, use a route in each private subnet: `0.0.0.0/0` → **NAT gateway** → **Internet Gateway (IGW)**. To do that, you typically create public subnets (for the NAT gateway), an IGW attached to the VPC, NAT gateway(s) in the public subnets, and private route tables that send default traffic to the NAT gateway. There is no inbound from the internet to the runners; they poll GitHub for jobs. You can build this with the **AWS Console** (VPC wizard), **Terraform**, or **CloudFormation**. You need at least **two private subnets** (e.g. in two AZs) for high availability, with DNS enabled on the VPC. After you create the VPC and subnets, put the VPC ID and private subnet IDs into `SHARED_VPC_ID` and `SHARED_SUBNETS` in GitHub Secrets.
 
-- `SHARED_VPC_ID`
-- `SHARED_SUBNETS`
+#### Choosing a VPC CIDR
 
-### How to choose `SHARED_VPC_CIDR`
+When you create your own VPC, choose a primary CIDR that is valid for your environment.
 
-Choose a CIDR that is valid for your environment, not just a doc example.
+**Rules:**
 
-Rules:
+- Use a **private RFC1918** range: `10.0.0.0/8`, `172.16.0.0/12`, or `192.168.0.0/16`.
+- Do **not** overlap with existing VPC CIDRs in this account/region.
+- Do **not** overlap with other VPCs or networks you need to reach (e.g. peering, VPN, Direct Connect).
+- Plan for subnet sizing (e.g. derive subnets from the VPC CIDR).
 
-- Use a private RFC1918 range (`10.0.0.0/8`, `172.16.0.0/12`, or `192.168.0.0/16`).
-- Do not overlap with existing VPC CIDRs in this account/region.
-- Do not overlap with other VPCs or networks you need to reach (e.g. peering, VPN, Direct Connect).
-- Keep it consistent with your subnet sizing plan (this module derives subnets from the VPC CIDR).
+**Address space:** A `/16` has 65,536 IPs. AWS allows a primary VPC CIDR between `/16` and `/28`. You can add additional CIDR blocks (e.g. a second `/16`) if you need more space. Two `/16`s give about 131,072 addresses in one VPC.
 
-Address space sizing:
-
-- A `/16` has 65,536 total IPs.
-- In AWS, each subnet reserves 5 IPs, but VPC-level CIDR capacity is still that size envelope.
-- Two `/16`s (`10.40.0.0/16` + `10.41.0.0/16`) give you about 131,072 total addresses in one VPC.
-- AWS does not allow a VPC primary CIDR of `/15`, so use a primary `/16` plus one additional `/16` if you need that headroom.
-
-Recommendation:
-
-- Start with a non-overlapping `/16` in `SHARED_VPC_CIDR`.
-- If you want extra headroom, add another non-overlapping `/16` in `SHARED_VPC_ADDITIONAL_CIDRS`.
-
-Why you might need that much:
-
-- Future growth in runners, services, and subnet count.
-- Room to expand without adding secondary CIDRs later.
-- Cleaner long-term network planning in shared environments.
-
-Benefits of using two `/16`s from day one:
-
-- More free address space from day one (about 131,072 total).
-- Fewer future rework events (subnet pressure, CIDR expansion planning).
-- Aligns with AWS VPC CIDR constraints (`/16` to `/28` per CIDR association).
-
-Check in AWS Console:
-
-1. Open **AWS Console** in the target account and region.
-2. Go to **VPC** → **Your VPCs**.
-3. Review the **CIDRs** column for existing VPC ranges.
-4. Check **VPC** → **Your VPCs** and any peering/VPN/direct connect routes your team uses to avoid overlap with connected networks.
-
-Check in CloudShell (same account/region):
+**Check existing CIDRs:** In **AWS Console** → **VPC** → **Your VPCs**, review the CIDRs column. In **CloudShell** (same account/region):
 
 ```bash
-# Set your region once
 AWS_REGION="us-east-1"
-
-# List VPC CIDRs in this region
 aws ec2 describe-vpcs \
   --region "$AWS_REGION" \
   --query "Vpcs[*].[VpcId,CidrBlock,Tags[?Key=='Name']|[0].Value]" \
   --output table
 ```
 
-Optional IPAM policy check:
+**Optional IPAM:** If your org uses AWS VPC IPAM, check `aws ec2 describe-ipam-pools --region "$AWS_REGION"` and confirm your chosen CIDR is allowed.
 
-```bash
-aws ec2 describe-ipam-pools --region "$AWS_REGION" --output table
-```
+**What is RFC1918?** These are the globally reserved private IPv4 ranges: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`. They are not routable on the public internet; AWS VPC uses them for private addressing.
 
-If this prints only the table header (for example `DescribeIpamPools` with no rows), it means no IPAM pools are visible in this account/region or your current role does not have permission to read them.
+**Good vs bad:** Good: pick a primary `/16` (e.g. `10.42.0.0/16`) that does not appear in your existing VPC list and does not overlap connected networks. Bad: reusing a CIDR already in use or overlapping peering/VPN.
 
-How to know which CIDR to pick:
+#### Choosing availability zones
 
-Choose a block that is:
-
-- In private RFC1918 space:
-  - `10.0.0.0/8`
-  - `172.16.0.0/12`
-  - `192.168.0.0/16`
-- Not present in your current VPC CIDR list.
-- Not overlapping other VPCs or connected networks you need to reach.
-- Allowed by your org IP policy or IPAM (if used).
-
-What is RFC1918?
-
-RFC1918 private IPv4 ranges:
-
-- `10.0.0.0/8` (10.0.0.0 - 10.255.255.255)
-- `172.16.0.0/12` (172.16.0.0 - 172.31.255.255)
-- `192.168.0.0/16` (192.168.0.0 - 192.168.255.255)
-
-In AWS VPCs, use CIDRs from one of these private ranges.
-
-```bash
-aws ec2 describe-ipams --region "$AWS_REGION" --output table
-aws ec2 describe-ipam-pools --region "$AWS_REGION" --output table
-```
-
-If these return nothing (or access denied), your org may not use IPAM in that account/region, or your role cannot read it. If `describe-ipam-pools` prints only the table header (for example `DescribeIpamPools` with no rows), treat that as no pools visible in this account/region for your current permissions. In that case, confirm allowed CIDR ranges with your network/platform team.
-
-Good vs bad examples:
-
-- Good: set `SHARED_VPC_CIDR=10.42.0.0/16` and `SHARED_VPC_ADDITIONAL_CIDRS=["10.43.0.0/16"]` when both are non-overlapping.
-- Bad: choosing `10.40.0.0/16` again when a VPC already uses that CIDR, or adding a secondary CIDR that overlaps existing/connected networks.
-- Policy check: confirm both `/16` CIDRs are allowed by your org network standards or IPAM pool constraints before deploy.
-
-### Detailed CIDR selection walkthrough
-
-#### How to pick `SHARED_VPC_CIDR`
-
-#### What to do first
-
-In CloudShell, set your target region:
-
-```bash
-AWS_REGION="us-east-1"
-```
-
-List existing VPC CIDRs in this account/region:
-
-```bash
-aws ec2 describe-vpcs \
-  --region "$AWS_REGION" \
-  --query "Vpcs[*].[VpcId,CidrBlock,Tags[?Key=='Name']|[0].Value]" \
-  --output table
-```
-
-List existing VPC CIDRs in this account/region (see above). For overlap with other networks, check any peering/VPN/direct connect your team uses.
-
-Optional quick CIDR-only view:
-
-```bash
-aws ec2 describe-vpcs \
-  --region "$AWS_REGION" \
-  --query "Vpcs[*].CidrBlock" \
-  --output text
-```
-
-Pick a non-overlapping primary `/16` for `SHARED_VPC_CIDR` (for example `10.60.0.0/16`).  
-If you need more headroom, add a second non-overlapping `/16` in `SHARED_VPC_ADDITIONAL_CIDRS` (for example `["10.61.0.0/16"]`).
-
-#### How to pick AZs (`SHARED_NETWORKING_AZS`)
-
-Pick at least 2 AZs in the chosen region for resiliency.
+Use **at least two Availability Zones** for high availability so that if one AZ has an issue, the other can still run runners.
 
 In CloudShell:
 
-First, set the AWS region:
-
 ```bash
 AWS_REGION="us-east-1"
-```
-
-Then, list AZ names:
-
-```bash
 aws ec2 describe-availability-zones \
   --region "$AWS_REGION" \
   --query "AvailabilityZones[?State=='available'].ZoneName" \
   --output text
 ```
 
-Then pick 2 of those AZs and set `SHARED_NETWORKING_AZS` as JSON, for example:
-
-```json
-["us-east-1a","us-east-1d"]
-```
-
-#### How to know which CIDR to pick
-
-Choose a block that is:
-
-- In private RFC1918 space:
-  - `10.0.0.0/8`
-  - `172.16.0.0/12`
-  - `192.168.0.0/16`
-- Not present in your current VPC CIDR list.
-- Not overlapping other VPCs or connected networks you need to reach.
-- Allowed by your org IP policy/IPAM (if used).
-
-Why those ranges (they are not random):
-
-- These are the globally reserved private IPv4 ranges defined by RFC1918.
-- They are intended for internal networks and are not publicly routable on the internet.
-- AWS VPC private addressing is built around these private ranges.
-
-#### What is RFC1918?
-
-RFC1918 private IPv4 ranges:
-
-- `10.0.0.0/8` (10.0.0.0 - 10.255.255.255)
-- `172.16.0.0/12` (172.16.0.0 - 172.31.255.255)
-- `192.168.0.0/16` (192.168.0.0 - 192.168.255.255)
-
-In AWS VPCs, use CIDRs from one of these private ranges.
-
-#### How to check org policy / IPAM in CloudShell
-
-If your org uses AWS VPC IPAM, check pools/allocations:
-
-```bash
-aws ec2 describe-ipams --region "$AWS_REGION" --output table
-aws ec2 describe-ipam-pools --region "$AWS_REGION" --output table
-```
-
-If these return nothing (or access denied), your org may not use IPAM in that account/region, or your role cannot read it. In that case, confirm allowed CIDR ranges with your network/platform team.
-
-If `describe-ipam-pools` output only shows the header (for example `DescribeIpamPools`) with no rows, it means no pools are visible in this account/region or your role lacks read permission.
+Pick two AZs (e.g. `us-east-1a` and `us-east-1d`) and create your private subnets in those AZs. Use the resulting VPC ID and private subnet IDs for `SHARED_VPC_ID` and `SHARED_SUBNETS`.
 
 **To find the correct AMI for your region:**
 
@@ -985,8 +795,7 @@ Once you fork the repository and set your GitHub **Secrets** and **Variables**, 
 1. **Build & Push Docker Image** (`.github/workflows/docker-build.yml`)
    - Choose your branch; set image tag to `latest`.
 2. **Multi-Org github runner Deployment** (`.github/workflows/deployment.yml`)
-   - Choose your branch; choose **plan** (recommended first validation). When `SHARED_CREATE_NETWORKING` is true, it will create the VPC, subnets, NAT gateway, and IGW in the same run.
-3. **Deploy networking only** (`.github/workflows/deploy-networking.yml`) – Optional. Use a separate state file to create or change only networking; see [.github/workflows/deploy-networking-README.md](.github/workflows/deploy-networking-README.md) (requires `TF_NETWORKING_STATE_KEY` and networking Variables).
+   - Choose your branch; choose **plan** (recommended first validation).
 
 If the main deployment and docker-build runs turn green, your configuration is likely correct. If any run turns red, start with **Troubleshooting workflow failures (red runs)** below.
 
@@ -1003,11 +812,11 @@ In your GitHub repository, click on the **Actions** tab.
 1. Click on **Multi-Org github runner Deployment** in the workflow list
 2. Click **Run workflow** (dropdown button on the right)
 3. Pick the branch you want to run it from (use your default branch unless you are testing changes on a branch)
-3. Select the action you want:
+4. Select the action you want:
    - **plan** - Preview what will be created (recommended first time)
    - **deploy** - Actually create everything in AWS
    - **destroy** - Remove everything (use with caution!)
-4. Click the green **Run workflow** button
+5. Click the green **Run workflow** button
 
 **(Optional) Screenshot placeholder:** Add a screenshot of the **Run workflow** dialog for this workflow here:
 `docs/screenshots/deployment-run-workflow.png`
@@ -1031,9 +840,6 @@ In your GitHub repository, click on the **Actions** tab.
 - Setting up networking and security
 - Creating storage (EFS) for runner settings
 - Starting your first runner
-- If **create networking** is enabled (`SHARED_CREATE_NETWORKING` = `true`), it creates the VPC, subnets, NAT gateway, and IGW first, then deploys into them
-- You can also run the **Deploy networking only** workflow (separate state file) to create or change just the networking without touching the main deployment; see [.github/workflows/deploy-networking-README.md](.github/workflows/deploy-networking-README.md)
-- When create networking is used, Terraform outputs include `networking_vpc_id`, `networking_vpc_cidrs`, `networking_subnet_ids`, and `networking_nat_gateway_ids` (visible after apply or via `terraform output`).
 
 **Important:**
 - This step costs money (you're creating AWS resources)

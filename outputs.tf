@@ -88,23 +88,3 @@ output "ecs_service_names" {
   value       = { for k, v in module.runner_service : k => v.ecs_service_name }
 }
 
-# Networking outputs (only when create_networking is true).
-output "networking_vpc_id" {
-  description = "ID of the VPC created by the networking module. Set only when create_networking is true."
-  value       = var.create_networking ? module.networking[0].vpc_id : null
-}
-
-output "networking_vpc_cidrs" {
-  description = "IPv4 CIDR blocks associated with the VPC created by the networking module. Set only when create_networking is true."
-  value       = var.create_networking ? module.networking[0].vpc_cidrs : null
-}
-
-output "networking_subnet_ids" {
-  description = "IDs of the private subnets created by the networking module. Set only when create_networking is true."
-  value       = var.create_networking ? module.networking[0].subnet_ids : null
-}
-
-output "networking_nat_gateway_ids" {
-  description = "IDs of the NAT gateways created by the networking module. Set only when create_networking is true."
-  value       = var.create_networking ? module.networking[0].nat_gateway_ids : null
-}

@@ -24,39 +24,10 @@ variable "aws_account_id" {
   type        = string
 }
 
-# When true, this repo creates the VPC, public subnets (for NAT), private subnets (for ECS), IGW, NAT gateway(s), and routes.
-# When false, you must provide vpc_id and subnets (existing VPC/subnets).
-variable "create_networking" {
-  description = "When true, create VPC, public/private subnets, IGW, NAT gateway(s), and routes (private -> NAT -> IGW). When false, use existing vpc_id and subnets."
-  type        = bool
-  default     = false
-}
-
-# CIDR block for the VPC when create_networking is true (e.g. 10.0.0.0/16). Required when create_networking is true.
-variable "vpc_cidr" {
-  description = "CIDR block for the created VPC when create_networking is true. Use a private range (e.g. 10.0.0.0/16) that does not overlap with other networks."
-  type        = string
-  default     = ""
-}
-
-variable "vpc_additional_cidrs" {
-  description = "Optional additional IPv4 CIDR blocks for the created VPC when create_networking is true (for example [\"10.41.0.0/16\"])."
-  type        = list(string)
-  default     = []
-}
-
-# Availability zone names for subnets when create_networking is true (e.g. [\"us-east-1a\", \"us-east-1d\"]). Required when create_networking is true.
-variable "networking_azs" {
-  description = "List of availability zone names where private subnets will be created when create_networking is true. Use at least two AZs for high availability."
-  type        = list(string)
-  default     = []
-}
-
 # List of subnet IDs where the runners will be deployed. You need at least 2 subnets (usually in different zones) for high availability.
 # A subnet is a range of IP addresses in your VPC (Virtual Private Cloud) - think of it as a specific network segment within your larger network where your resources can be placed.
-# Required when create_networking is false; ignored when create_networking is true.
 variable "subnets" {
-  description = "List of subnet IDs for the GitHub runner ECS service. Required when create_networking is false."
+  description = "List of subnet IDs for the GitHub runner ECS service. Required."
   type        = list(string)
   default     = []
 }
@@ -170,9 +141,8 @@ variable "create_cluster" {
 }
 
 # The ID of your Virtual Private Cloud (VPC). This is the network where all your runners will live.
-# Required when create_networking is false; ignored when create_networking is true (module output is used).
 variable "vpc_id" {
-  description = "VPC ID. Required when create_networking is false."
+  description = "VPC ID. Required."
   type        = string
   default     = ""
 }
