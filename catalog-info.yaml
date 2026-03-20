@@ -1,8 +1,8 @@
 apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
-  name: developer-portal
-  description: Backstage portal
+  name: terraform-github-runner-ecs
+  description: terraform-github-runner-ecs
 spec:
   type: website
   owner: user:guest
